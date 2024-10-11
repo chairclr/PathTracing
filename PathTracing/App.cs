@@ -9,7 +9,7 @@ public class App : IDisposable
 
     public readonly IWindow Window;
 
-    public readonly Renderer Renderer;
+    public Renderer Renderer { get; private set; } = null!;
 
     public App()
     {
@@ -20,14 +20,26 @@ public class App : IDisposable
         };
 
         Window = Silk.NET.Windowing.Window.Create(windowOptions);
+
+        Window.Load += Load;
+        Window.Render += (dt) => 
+        {
+            Renderer.Render((float)dt);
+        };
+        
         Window.Initialize();
+    }
+
+    public void Load()
+    {
+        Renderer = new Renderer(Window);
 
         if (Window.VkSurface is null)
         {
             throw new Exception("Platform does not support Vulkan");
         }
 
-        Renderer = new Renderer(Window);
+        Renderer.Load();
     }
 
     public void Run()
