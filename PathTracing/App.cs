@@ -1,4 +1,5 @@
 using Silk.NET.Windowing;
+using PathTracing.Graphics;
 
 namespace PathTracing;
 
@@ -6,7 +7,9 @@ public class App : IDisposable
 {
     private bool _disposed;
 
-    public IWindow Window { get; private set; }
+    public readonly IWindow Window;
+
+    public readonly Renderer Renderer;
 
     public App()
     {
@@ -23,6 +26,8 @@ public class App : IDisposable
         {
             throw new Exception("Platform does not support Vulkan");
         }
+
+        Renderer = new Renderer(Window);
     }
 
     public void Run()
@@ -34,6 +39,8 @@ public class App : IDisposable
     {
         if (!_disposed)
         {
+            Renderer.Dispose();
+
             _disposed = true;
         }
     }
