@@ -1,5 +1,6 @@
 using Silk.NET.Windowing;
 using PathTracing.Graphics;
+using Silk.NET.Windowing.Sdl;
 
 namespace PathTracing;
 
@@ -13,10 +14,13 @@ public class App : IDisposable
 
     public App()
     {
-        WindowOptions windowOptions = WindowOptions.DefaultVulkan with
+        SdlWindowing.Use();
+        WindowOptions windowOptions = WindowOptions.Default with
         {
             Size = new Silk.NET.Maths.Vector2D<int>(1280, 720),
-            Title = "Vulkan PathTracing"
+            Title = "Vulkan PathTracing",
+            API = GraphicsAPI.None,
+            IsVisible = true
         };
 
         Window = Silk.NET.Windowing.Window.Create(windowOptions);
@@ -26,18 +30,11 @@ public class App : IDisposable
         {
             Renderer.Render((float)dt);
         };
-        
-        Window.Initialize();
     }
 
     public void Load()
     {
         Renderer = new Renderer(Window);
-
-        if (Window.VkSurface is null)
-        {
-            throw new Exception("Platform does not support Vulkan");
-        }
 
         Renderer.Load();
     }
