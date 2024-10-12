@@ -10,9 +10,10 @@ PS_INPUT VSMain(VS_INPUT input)
 {
     PS_INPUT output;
     
-    float4 worldPosition = float4(input.position, 1.0);
+    float4 worldPosition = float4(input.pos, 1.0);
     
-    output.position = worldPosition;//mul(worldPosition, ViewProjection);
+    output.pos = worldPosition;//mul(worldPosition, ViewProjection);
+    output.uv = input.uv;
     
     return output;
 }

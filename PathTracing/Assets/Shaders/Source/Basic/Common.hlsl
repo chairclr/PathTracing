@@ -1,11 +1,12 @@
 struct VS_INPUT
 {
-    float3 position : POSITION;
+    float3 pos : POSITION;
+    float2 uv : TEXCOORD0;
 };
 
 struct PS_INPUT
 {
-    float4 position : SV_POSITION;
+    float4 pos : SV_POSITION;
     float2 uv : TEXCOORD0;
 };
 

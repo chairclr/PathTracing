@@ -1,4 +1,5 @@
 
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using PathTracing.Logging;
@@ -9,6 +10,7 @@ using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using Silk.NET.Windowing;
+using Buffer = Silk.NET.Vulkan.Buffer;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace PathTracing.Graphics;
@@ -47,11 +49,21 @@ public unsafe class Renderer : IDisposable
     private CommandPool commandPool;
     private CommandBuffer[]? commandBuffers;
 
+    private Buffer vertexBuffer;
+    private DeviceMemory vertexBufferMemory;
+
     private Semaphore[]? imageAvailableSemaphores;
     private Semaphore[]? renderFinishedSemaphores;
     private Fence[]? inFlightFences;
     private Fence[]? imagesInFlight;
     private int currentFrame = 0;
+
+    private Vertex[] vertices = new Vertex[]
+    {
+        new Vertex { pos = new Vector3(0.0f, -0.5f, 1f), uv = new Vector2(1.0f, 0.0f) },
+        new Vertex { pos = new Vector3(0.5f,  0.5f, 1f), uv = new Vector2(0.0f, 1.0f) },
+        new Vertex { pos = new Vector3(-0.5f, 0.5f, 1f), uv = new Vector2(0.0f, 0.0f) },
+    };
 
     public Renderer(IWindow window)
     {
@@ -71,6 +83,7 @@ public unsafe class Renderer : IDisposable
         CreateGraphicsPipeline();
         CreateFramebuffers();
         CreateCommandPool();
+        CreateVertexBuffer();
         CreateCommandBuffers();
         CreateSyncObjects();
     }
@@ -429,12 +442,41 @@ public unsafe class Renderer : IDisposable
             pixelShaderStageInfo
         };
 
+        VertexInputAttributeDescription* vertexAttribtues = stackalloc[]
+        {
+            new VertexInputAttributeDescription()
+            {
+                Binding = 0,
+                Location = 0,
+                Format = Format.R32G32B32Sfloat,
+                Offset = (uint)Marshal.OffsetOf<Vertex>(nameof(Vertex.pos)),
+            },
+            new VertexInputAttributeDescription()
+            {
+                Binding = 0,
+                Location = 1,
+                Format = Format.R32G32Sfloat,
+                Offset = (uint)Marshal.OffsetOf<Vertex>(nameof(Vertex.uv)),
+            }
+        };
+
+        VertexInputBindingDescription* bindingDescription = stackalloc[]
+        {
+            new VertexInputBindingDescription()
+            {
+                Binding = 0,
+                Stride = (uint)Unsafe.SizeOf<Vertex>(),
+                InputRate = VertexInputRate.Vertex,
+            }
+        };
+
         PipelineVertexInputStateCreateInfo vertexInputInfo = new()
         {
             SType = StructureType.PipelineVertexInputStateCreateInfo,
             VertexBindingDescriptionCount = 1,
-            VertexAttributeDescriptionCount = 1,
-            PVertexAttributeDescriptions = Vertex.GetVertexAttributeDescriptions()
+            VertexAttributeDescriptionCount = 2,
+            PVertexAttributeDescriptions = vertexAttribtues,
+            PVertexBindingDescriptions = bindingDescription
         };
 
         PipelineInputAssemblyStateCreateInfo inputAssembly = new()
@@ -611,7 +653,6 @@ public unsafe class Renderer : IDisposable
             }
         }
 
-
         for (int i = 0; i < commandBuffers.Length; i++)
         {
             CommandBufferBeginInfo beginInfo = new()
@@ -638,7 +679,7 @@ public unsafe class Renderer : IDisposable
 
             ClearValue clearColor = new()
             {
-                Color = new() { Float32_0 = 1f, Float32_1 = 0f, Float32_2 = 0f, Float32_3 = 1f },
+                Color = new() { Float32_0 = 0f, Float32_1 = 0f, Float32_2 = 0f, Float32_3 = 1f },
             };
 
             renderPassInfo.ClearValueCount = 1;
@@ -648,7 +689,16 @@ public unsafe class Renderer : IDisposable
 
             VkAPI.API.CmdBindPipeline(commandBuffers[i], PipelineBindPoint.Graphics, graphicsPipeline);
 
-            VkAPI.API.CmdDraw(commandBuffers[i], 3, 1, 0, 0);
+            var vertexBuffers = new Buffer[] { vertexBuffer };
+            var offsets = new ulong[] { 0 };
+
+            fixed (ulong* offsetsPtr = offsets)
+            fixed (Buffer* vertexBuffersPtr = vertexBuffers)
+            {
+                VkAPI.API.CmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffersPtr, offsetsPtr);
+            }
+
+            VkAPI.API.CmdDraw(commandBuffers[i], (uint)vertices.Length, 1, 0, 0);
 
             VkAPI.API.CmdEndRenderPass(commandBuffers[i]);
 
@@ -656,7 +706,6 @@ public unsafe class Renderer : IDisposable
             {
                 throw new Exception("failed to record command buffer!");
             }
-
         }
     }
 
@@ -755,6 +804,65 @@ public unsafe class Renderer : IDisposable
         currentFrame = (currentFrame + 1) % FRAMEBUFFER_COUNT;
     }
 
+    private void CreateVertexBuffer()
+    {
+        BufferCreateInfo bufferInfo = new()
+        {
+            SType = StructureType.BufferCreateInfo,
+            Size = (ulong)(sizeof(Vertex) * vertices.Length),
+            Usage = BufferUsageFlags.VertexBufferBit,
+            SharingMode = SharingMode.Exclusive,
+        };
+
+        fixed (Buffer* vertexBufferPtr = &vertexBuffer)
+        {
+            if (VkAPI.API.CreateBuffer(Device, bufferInfo, null, vertexBufferPtr) != Result.Success)
+            {
+                throw new Exception("failed to create vertex buffer!");
+            }
+        }
+
+        MemoryRequirements memRequirements = new();
+        VkAPI.API.GetBufferMemoryRequirements(Device, vertexBuffer, out memRequirements);
+
+        MemoryAllocateInfo allocateInfo = new()
+        {
+            SType = StructureType.MemoryAllocateInfo,
+            AllocationSize = memRequirements.Size,
+            MemoryTypeIndex = FindMemoryType(memRequirements.MemoryTypeBits, MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit),
+        };
+
+        fixed (DeviceMemory* vertexBufferMemoryPtr = &vertexBufferMemory)
+        {
+            if (VkAPI.API.AllocateMemory(Device, allocateInfo, null, vertexBufferMemoryPtr) != Result.Success)
+            {
+                throw new Exception("failed to allocate vertex buffer memory!");
+            }
+        }
+
+        VkAPI.API.BindBufferMemory(Device, vertexBuffer, vertexBufferMemory, 0);
+
+        void* data;
+        VkAPI.API.MapMemory(Device, vertexBufferMemory, 0, bufferInfo.Size, 0, &data);
+        vertices.AsSpan().CopyTo(new Span<Vertex>(data, vertices.Length));
+        VkAPI.API.UnmapMemory(Device, vertexBufferMemory);
+    }
+
+    private uint FindMemoryType(uint typeFilter, MemoryPropertyFlags properties)
+    {
+        VkAPI.API.GetPhysicalDeviceMemoryProperties(PhysicalDevice, out PhysicalDeviceMemoryProperties memProperties);
+
+        for (int i = 0; i < memProperties.MemoryTypeCount; i++)
+        {
+            if ((typeFilter & (1 << i)) != 0 && (memProperties.MemoryTypes[i].PropertyFlags & properties) == properties)
+            {
+                return (uint)i;
+            }
+        }
+
+        throw new Exception("failed to find suitable memory type!");
+    }
+
     private ShaderModule CreateShaderModule(byte[] code)
     {
         ShaderModuleCreateInfo createInfo = new()
@@ -778,7 +886,6 @@ public unsafe class Renderer : IDisposable
         return shaderModule;
 
     }
-
 
     private SurfaceFormatKHR ChooseSwapSurfaceFormat(IReadOnlyList<SurfaceFormatKHR> availableFormats)
     {

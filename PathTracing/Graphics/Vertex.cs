@@ -11,21 +11,24 @@ public struct Vertex
     public Vector3 pos;
     public Vector2 uv;
 
-    public static VertexInputBindingDescription GetBindingDescription()
+    public static unsafe VertexInputBindingDescription[] GetBindingDescription()
     {
-        VertexInputBindingDescription bindingDescription = new()
+        VertexInputBindingDescription[] bindingDescription = new[]
         {
-            Binding = 0,
-            Stride = (uint)Unsafe.SizeOf<Vertex>(),
-            InputRate = VertexInputRate.Vertex,
+            new VertexInputBindingDescription()
+            {
+                Binding = 0,
+                Stride = (uint)Unsafe.SizeOf<Vertex>(),
+                InputRate = VertexInputRate.Vertex,
+            }
         };
 
         return bindingDescription;
     }
 
-    public static unsafe VertexInputAttributeDescription* GetVertexAttributeDescriptions()
+    public static unsafe VertexInputAttributeDescription[] GetVertexAttributeDescriptions()
     {
-        VertexInputAttributeDescription* attributeDescriptions = stackalloc[]
+        VertexInputAttributeDescription[] attributeDescriptions = new[]
         {
             new VertexInputAttributeDescription()
             {
@@ -39,7 +42,7 @@ public struct Vertex
                 Binding = 0,
                 Location = 0,
                 Format = Format.R32G32Sfloat,
-                Offset = (uint)Marshal.OffsetOf<Vertex>(nameof(pos)),
+                Offset = (uint)Marshal.OffsetOf<Vertex>(nameof(uv)),
             }
         };
 
