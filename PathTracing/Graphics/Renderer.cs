@@ -37,7 +37,7 @@ public unsafe class Renderer : IDisposable
     private Image[]? SwapChainImages;
     private Format SwapChainImageFormat;
     private Extent2D SwapChainExtent;
-    private const int FRAMEBUFFER_COUNT = 2;
+    private const int MAX_FRAMES_IN_FLIGHT = 2;
 
     private ImageView[]? swapChainImageViews;
     private Framebuffer[]? swapChainFramebuffers;
@@ -319,6 +319,54 @@ public unsafe class Renderer : IDisposable
 
         SwapChainImageFormat = surfaceFormat.Format;
         SwapChainExtent = extent;
+    }
+
+    private void RecreateSwapChain()
+    {
+        Vector2D<int> framebufferSize = Window.FramebufferSize;
+
+        while (framebufferSize.X == 0 || framebufferSize.Y == 0)
+        {
+            framebufferSize = Window.FramebufferSize;
+            Window.DoEvents();
+        }
+
+        VkAPI.API.DeviceWaitIdle(Device);
+
+        CleanUpSwapChain();
+
+        CreateSwapChain();
+        CreateImageViews();
+        CreateRenderPass();
+        CreateGraphicsPipeline();
+        CreateFramebuffers();
+        CreateCommandBuffers();
+
+        imagesInFlight = new Fence[SwapChainImages!.Length];
+    }
+
+    private void CleanUpSwapChain()
+    {
+        foreach (Framebuffer framebuffer in swapChainFramebuffers!)
+        {
+            VkAPI.API.DestroyFramebuffer(Device, framebuffer, null);
+        }
+
+        fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
+        {
+            VkAPI.API.FreeCommandBuffers(Device, commandPool, (uint)commandBuffers!.Length, commandBuffersPtr);
+        }
+
+        VkAPI.API.DestroyPipeline(Device, graphicsPipeline, null);
+        VkAPI.API.DestroyPipelineLayout(Device, pipelineLayout, null);
+        VkAPI.API.DestroyRenderPass(Device, renderPass, null);
+
+        foreach (ImageView imageView in swapChainImageViews!)
+        {
+            VkAPI.API.DestroyImageView(Device, imageView, null);
+        }
+
+        KhrSwapChain!.DestroySwapchain(Device, SwapChain, null);
     }
 
     private void CreateImageViews()
@@ -696,6 +744,7 @@ public unsafe class Renderer : IDisposable
             fixed (Buffer* vertexBuffersPtr = vertexBuffers)
             {
                 VkAPI.API.CmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffersPtr, offsetsPtr);
+
             }
 
             VkAPI.API.CmdDraw(commandBuffers[i], (uint)vertices.Length, 1, 0, 0);
@@ -711,9 +760,9 @@ public unsafe class Renderer : IDisposable
 
     private void CreateSyncObjects()
     {
-        imageAvailableSemaphores = new Semaphore[FRAMEBUFFER_COUNT];
-        renderFinishedSemaphores = new Semaphore[FRAMEBUFFER_COUNT];
-        inFlightFences = new Fence[FRAMEBUFFER_COUNT];
+        imageAvailableSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
+        renderFinishedSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
+        inFlightFences = new Fence[MAX_FRAMES_IN_FLIGHT];
         imagesInFlight = new Fence[SwapChainImages!.Length];
 
         SemaphoreCreateInfo semaphoreInfo = new()
@@ -727,7 +776,7 @@ public unsafe class Renderer : IDisposable
             Flags = FenceCreateFlags.SignaledBit,
         };
 
-        for (int i = 0; i < FRAMEBUFFER_COUNT; i++)
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
             if (VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out imageAvailableSemaphores[i]) != Result.Success ||
                 VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out renderFinishedSemaphores[i]) != Result.Success ||
@@ -740,14 +789,24 @@ public unsafe class Renderer : IDisposable
 
     private void DrawFrame(float delta)
     {
-        VkAPI.API.WaitForFences(Device, 1, in inFlightFences![currentFrame], true, ulong.MaxValue);
+        VkAPI.API.WaitForFences(Device, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
 
         uint imageIndex = 0;
-        KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
+        Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
+
+        if (result == Result.ErrorOutOfDateKhr)
+        {
+            RecreateSwapChain();
+            return;
+        }
+        else if (result != Result.Success && result != Result.SuboptimalKhr)
+        {
+            throw new Exception("failed to acquire swap chain image!");
+        }
 
         if (imagesInFlight![imageIndex].Handle != default)
         {
-            VkAPI.API.WaitForFences(Device, 1, in imagesInFlight[imageIndex], true, ulong.MaxValue);
+            VkAPI.API.WaitForFences(Device, 1, imagesInFlight[imageIndex], true, ulong.MaxValue);
         }
         imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
@@ -778,9 +837,9 @@ public unsafe class Renderer : IDisposable
             PSignalSemaphores = signalSemaphores,
         };
 
-        VkAPI.API.ResetFences(Device, 1, in inFlightFences[currentFrame]);
+        VkAPI.API.ResetFences(Device, 1, inFlightFences[currentFrame]);
 
-        if (VkAPI.API.QueueSubmit(GraphicsQueue, 1, in submitInfo, inFlightFences[currentFrame]) != Result.Success)
+        if (VkAPI.API.QueueSubmit(GraphicsQueue, 1, submitInfo, inFlightFences[currentFrame]) != Result.Success)
         {
             throw new Exception("failed to submit draw command buffer!");
         }
@@ -799,9 +858,19 @@ public unsafe class Renderer : IDisposable
             PImageIndices = &imageIndex
         };
 
-        KhrSwapChain.QueuePresent(PresentQueue, in presentInfo);
+        result = KhrSwapChain.QueuePresent(PresentQueue, presentInfo);
 
-        currentFrame = (currentFrame + 1) % FRAMEBUFFER_COUNT;
+        if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr /*|| frameBufferResized*/)
+        {
+            //frameBufferResized = false;
+            RecreateSwapChain();
+        }
+        else if (result != Result.Success)
+        {
+            throw new Exception("failed to present swap chain image!");
+        }
+
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     private void CreateVertexBuffer()
@@ -1142,6 +1211,22 @@ public unsafe class Renderer : IDisposable
 
             _disposed = true;
         }
+    }
+
+    record struct FrameData
+    {
+        public CommandPool CommandPool;
+        public CommandBuffer CommandBuffer;
+        public Fence Fence;
+        public Image RenderTarget;
+        public ImageView RenderTargetView;
+        public Framebuffer Framebuffer;
+    }
+
+    record struct FrameSemaphores
+    {
+        public Semaphore ImageAcquiredSemaphore;
+        public Semaphore RenderCompleteSemaphore;
     }
 
     public void Dispose()
