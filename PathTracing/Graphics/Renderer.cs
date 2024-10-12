@@ -66,6 +66,13 @@ public unsafe class Renderer : IDisposable
         PickPhysicalDevice();
         CreateLogicalDevice();
         CreateSwapChain();
+        CreateImageViews();
+        CreateRenderPass();
+        CreateGraphicsPipeline();
+        CreateFramebuffers();
+        CreateCommandPool();
+        CreateCommandBuffers();
+        CreateSyncObjects();
     }
 
     public void Update(float deltaTime)
@@ -75,7 +82,7 @@ public unsafe class Renderer : IDisposable
 
     public void Render(float deltaTime)
     {
-
+        DrawFrame(deltaTime);
     }
 
     private void CreateInstance()
@@ -393,9 +400,9 @@ public unsafe class Renderer : IDisposable
 
     private void CreateGraphicsPipeline()
     {
-        // TODO: THIS
-        byte[] vertShaderCode = File.ReadAllBytes("shaders/vert.spv");
-        byte[] fragShaderCode = File.ReadAllBytes("shaders/frag.spv");
+        string path = Path.Combine(AppContext.BaseDirectory, "Assets", "Shaders", "Compiled");
+        byte[] vertShaderCode = File.ReadAllBytes(Path.Combine(path, "Basic", "VertexShader.spirv"));
+        byte[] fragShaderCode = File.ReadAllBytes(Path.Combine(path, "Basic", "PixelShader.spirv"));
 
         ShaderModule vertShaderModule = CreateShaderModule(vertShaderCode);
         ShaderModule pixelShaderModule = CreateShaderModule(fragShaderCode);
@@ -425,8 +432,9 @@ public unsafe class Renderer : IDisposable
         PipelineVertexInputStateCreateInfo vertexInputInfo = new()
         {
             SType = StructureType.PipelineVertexInputStateCreateInfo,
-            VertexBindingDescriptionCount = 0,
-            VertexAttributeDescriptionCount = 0,
+            VertexBindingDescriptionCount = 1,
+            VertexAttributeDescriptionCount = 1,
+            PVertexAttributeDescriptions = Vertex.GetVertexAttributeDescriptions()
         };
 
         PipelineInputAssemblyStateCreateInfo inputAssembly = new()
@@ -681,7 +689,7 @@ public unsafe class Renderer : IDisposable
         }
     }
 
-    private void DrawFrame(double delta)
+    private void DrawFrame(float delta)
     {
         VkAPI.API.WaitForFences(Device, 1, in inFlightFences![currentFrame], true, ulong.MaxValue);
 
@@ -882,12 +890,12 @@ public unsafe class Renderer : IDisposable
     private bool CheckDeviceExtensionsSupport(PhysicalDevice device)
     {
         uint extentionsCount = 0;
-        VkAPI.API.EnumerateDeviceExtensionProperties(Device, (byte*)null, ref extentionsCount, null);
+        VkAPI.API.EnumerateDeviceExtensionProperties(device, (byte*)null, ref extentionsCount, null);
 
         ExtensionProperties[] availableExtensions = new ExtensionProperties[extentionsCount];
         fixed (ExtensionProperties* availableExtensionsPtr = availableExtensions)
         {
-            VkAPI.API.EnumerateDeviceExtensionProperties(Device, (byte*)null, ref extentionsCount, availableExtensionsPtr);
+            VkAPI.API.EnumerateDeviceExtensionProperties(device, (byte*)null, ref extentionsCount, availableExtensionsPtr);
         }
 
         HashSet<string?> availableExtensionNames = availableExtensions.Select(extension => Marshal.PtrToStringAnsi((IntPtr)extension.ExtensionName)).ToHashSet();
