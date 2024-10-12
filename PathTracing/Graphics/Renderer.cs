@@ -547,7 +547,7 @@ public unsafe class Renderer : IDisposable
 
         for (int i = 0; i < swapChainImageViews.Length; i++)
         {
-            var attachment = swapChainImageViews[i];
+            ImageView attachment = swapChainImageViews[i];
 
             FramebufferCreateInfo framebufferInfo = new()
             {
@@ -560,7 +560,7 @@ public unsafe class Renderer : IDisposable
                 Layers = 1,
             };
 
-            if (VkAPI.API.CreateFramebuffer(Device, framebufferInfo, null, out swapChainFramebuffers[i]) != Result.Success)
+            if (VkAPI.API.CreateFramebuffer(Device, in framebufferInfo, null, out swapChainFramebuffers[i]) != Result.Success)
             {
                 throw new Exception("failed to create framebuffer!");
             }
@@ -569,7 +569,7 @@ public unsafe class Renderer : IDisposable
 
     private void CreateCommandPool()
     {
-        var queueFamiliyIndicies = FindQueueFamilies(PhysicalDevice);
+        QueueFamilyIndices queueFamiliyIndicies = FindQueueFamilies(PhysicalDevice);
 
         CommandPoolCreateInfo poolInfo = new()
         {
@@ -577,7 +577,7 @@ public unsafe class Renderer : IDisposable
             QueueFamilyIndex = queueFamiliyIndicies.GraphicsFamily!.Value,
         };
 
-        if (VkAPI.API.CreateCommandPool(Device, poolInfo, null, out commandPool) != Result.Success)
+        if (VkAPI.API.CreateCommandPool(Device, in poolInfo, null, out commandPool) != Result.Success)
         {
             throw new Exception("failed to create command pool!");
         }
@@ -597,7 +597,7 @@ public unsafe class Renderer : IDisposable
 
         fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
         {
-            if (VkAPI.API.AllocateCommandBuffers(Device, allocInfo, commandBuffersPtr) != Result.Success)
+            if (VkAPI.API.AllocateCommandBuffers(Device, in allocInfo, commandBuffersPtr) != Result.Success)
             {
                 throw new Exception("failed to allocate command buffers!");
             }
@@ -611,9 +611,9 @@ public unsafe class Renderer : IDisposable
                 SType = StructureType.CommandBufferBeginInfo,
             };
 
-            if (VkAPI.API.BeginCommandBuffer(commandBuffers[i], beginInfo) != Result.Success)
+            if (VkAPI.API.BeginCommandBuffer(commandBuffers[i], in beginInfo) != Result.Success)
             {
-                throw new Exception("failed to begin recording command buffer!");
+                throw new Exception("Failed to begin command buffer");
             }
 
             RenderPassBeginInfo renderPassInfo = new()
@@ -630,7 +630,7 @@ public unsafe class Renderer : IDisposable
 
             ClearValue clearColor = new()
             {
-                Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
+                Color = new() { Float32_0 = 1f, Float32_1 = 0f, Float32_2 = 0f, Float32_3 = 1f },
             };
 
             renderPassInfo.ClearValueCount = 1;
@@ -670,11 +670,11 @@ public unsafe class Renderer : IDisposable
             Flags = FenceCreateFlags.SignaledBit,
         };
 
-        for (var i = 0; i < FRAMEBUFFER_COUNT; i++)
+        for (int i = 0; i < FRAMEBUFFER_COUNT; i++)
         {
-            if (VkAPI.API.CreateSemaphore(Device, semaphoreInfo, null, out imageAvailableSemaphores[i]) != Result.Success ||
-                VkAPI.API.CreateSemaphore(Device, semaphoreInfo, null, out renderFinishedSemaphores[i]) != Result.Success ||
-                VkAPI.API.CreateFence(Device, fenceInfo, null, out inFlightFences[i]) != Result.Success)
+            if (VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out imageAvailableSemaphores[i]) != Result.Success ||
+                VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out renderFinishedSemaphores[i]) != Result.Success ||
+                VkAPI.API.CreateFence(Device, in fenceInfo, null, out inFlightFences[i]) != Result.Success)
             {
                 throw new Exception("failed to create synchronization objects for a frame!");
             }
@@ -683,14 +683,14 @@ public unsafe class Renderer : IDisposable
 
     private void DrawFrame(double delta)
     {
-        VkAPI.API.WaitForFences(Device, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
+        VkAPI.API.WaitForFences(Device, 1, in inFlightFences![currentFrame], true, ulong.MaxValue);
 
         uint imageIndex = 0;
-        khrSwapChain!.AcquireNextImage(Device, swapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
+        KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
 
         if (imagesInFlight![imageIndex].Handle != default)
         {
-            VkAPI.API.WaitForFences(Device, 1, imagesInFlight[imageIndex], true, ulong.MaxValue);
+            VkAPI.API.WaitForFences(Device, 1, in imagesInFlight[imageIndex], true, ulong.MaxValue);
         }
         imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
@@ -699,10 +699,10 @@ public unsafe class Renderer : IDisposable
             SType = StructureType.SubmitInfo,
         };
 
-        var waitSemaphores = stackalloc[] { imageAvailableSemaphores[currentFrame] };
-        var waitStages = stackalloc[] { PipelineStageFlags.ColorAttachmentOutputBit };
+        Semaphore* waitSemaphores = stackalloc[] { imageAvailableSemaphores[currentFrame] };
+        PipelineStageFlags* waitStages = stackalloc[] { PipelineStageFlags.ColorAttachmentOutputBit };
 
-        var buffer = commandBuffers![imageIndex];
+        CommandBuffer buffer = commandBuffers![imageIndex];
 
         submitInfo = submitInfo with
         {
@@ -714,21 +714,21 @@ public unsafe class Renderer : IDisposable
             PCommandBuffers = &buffer
         };
 
-        var signalSemaphores = stackalloc[] { renderFinishedSemaphores![currentFrame] };
+        Semaphore* signalSemaphores = stackalloc[] { renderFinishedSemaphores![currentFrame] };
         submitInfo = submitInfo with
         {
             SignalSemaphoreCount = 1,
             PSignalSemaphores = signalSemaphores,
         };
 
-        VkAPI.API.ResetFences(Device, 1, inFlightFences[currentFrame]);
+        VkAPI.API.ResetFences(Device, 1, in inFlightFences[currentFrame]);
 
-        if (VkAPI.API.QueueSubmit(graphicsQueue, 1, submitInfo, inFlightFences[currentFrame]) != Result.Success)
+        if (VkAPI.API.QueueSubmit(GraphicsQueue, 1, in submitInfo, inFlightFences[currentFrame]) != Result.Success)
         {
             throw new Exception("failed to submit draw command buffer!");
         }
 
-        var swapChains = stackalloc[] { swapChain };
+        SwapchainKHR* swapChains = stackalloc[] { SwapChain };
         PresentInfoKHR presentInfo = new()
         {
             SType = StructureType.PresentInfoKhr,
@@ -742,10 +742,9 @@ public unsafe class Renderer : IDisposable
             PImageIndices = &imageIndex
         };
 
-        khrSwapChain.QueuePresent(presentQueue, presentInfo);
+        KhrSwapChain.QueuePresent(PresentQueue, in presentInfo);
 
         currentFrame = (currentFrame + 1) % FRAMEBUFFER_COUNT;
-
     }
 
     private ShaderModule CreateShaderModule(byte[] code)
@@ -762,7 +761,7 @@ public unsafe class Renderer : IDisposable
         {
             createInfo.PCode = (uint*)codePtr;
 
-            if (VkAPI.API.CreateShaderModule(Device, createInfo, null, out shaderModule) != Result.Success)
+            if (VkAPI.API.CreateShaderModule(Device, in createInfo, null, out shaderModule) != Result.Success)
             {
                 throw new Exception();
             }
@@ -918,7 +917,7 @@ public unsafe class Renderer : IDisposable
                 indices.GraphicsFamily = i;
             }
 
-            KhrSurface!.GetPhysicalDeviceSurfaceSupport(device, i, Surface, out var presentSupport);
+            KhrSurface!.GetPhysicalDeviceSurfaceSupport(device, i, Surface, out Bool32 presentSupport);
 
             if (presentSupport)
             {
@@ -938,7 +937,7 @@ public unsafe class Renderer : IDisposable
 
     private string[] GetRequiredExtensions()
     {
-        byte** glfwExtensions = Window.VkSurface!.GetRequiredExtensions(out var glfwExtensionCount);
+        byte** glfwExtensions = Window.VkSurface!.GetRequiredExtensions(out uint glfwExtensionCount);
         string[] extensions = SilkMarshal.PtrToStringArray((nint)glfwExtensions, (int)glfwExtensionCount);
 
 #if DEBUG
