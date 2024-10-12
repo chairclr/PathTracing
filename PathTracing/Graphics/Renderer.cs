@@ -87,7 +87,7 @@ public unsafe class Renderer : IDisposable
         }
 #endif
 
-        ApplicationInfo appInfo = new ApplicationInfo()
+        ApplicationInfo appInfo = new()
         {
             SType = StructureType.ApplicationInfo,
             PApplicationName = (byte*)Marshal.StringToHGlobalAnsi("Hello Triangle"),
@@ -97,7 +97,7 @@ public unsafe class Renderer : IDisposable
             ApiVersion = Vk.Version12
         };
 
-        InstanceCreateInfo createInfo = new InstanceCreateInfo()
+        InstanceCreateInfo createInfo = new()
         {
             SType = StructureType.InstanceCreateInfo,
             PApplicationInfo = &appInfo
@@ -307,7 +307,7 @@ public unsafe class Renderer : IDisposable
 
         for (int i = 0; i < SwapChainImages.Length; i++)
         {
-            ImageViewCreateInfo createInfo = new ImageViewCreateInfo()
+            ImageViewCreateInfo createInfo = new()
             {
                 SType = StructureType.ImageViewCreateInfo,
                 Image = SwapChainImages[i],
@@ -333,7 +333,7 @@ public unsafe class Renderer : IDisposable
 
             if (VkAPI.API.CreateImageView(Device, in createInfo, null, out swapChainImageViews[i]) != Result.Success)
             {
-                throw new Exception("failed to create image views!");
+                throw new Exception("Failed to create image views");
             }
         }
     }
@@ -342,7 +342,7 @@ public unsafe class Renderer : IDisposable
     {
         AttachmentDescription colorAttachment = new()
         {
-            Format = swapChainImageFormat,
+            Format = SwapChainImageFormat,
             Samples = SampleCountFlags.Count1Bit,
             LoadOp = AttachmentLoadOp.Clear,
             StoreOp = AttachmentStoreOp.Store,
@@ -385,7 +385,7 @@ public unsafe class Renderer : IDisposable
             PDependencies = &dependency,
         };
 
-        if (VkAPI.API.CreateRenderPass(device, renderPassInfo, null, out renderPass) != Result.Success)
+        if (VkAPI.API.CreateRenderPass(Device, in renderPassInfo, null, out renderPass) != Result.Success)
         {
             throw new Exception("failed to create render pass!");
         }
@@ -393,32 +393,33 @@ public unsafe class Renderer : IDisposable
 
     private void CreateGraphicsPipeline()
     {
-        var vertShaderCode = File.ReadAllBytes("shaders/vert.spv");
-        var fragShaderCode = File.ReadAllBytes("shaders/frag.spv");
+        // TODO: THIS
+        byte[] vertShaderCode = File.ReadAllBytes("shaders/vert.spv");
+        byte[] fragShaderCode = File.ReadAllBytes("shaders/frag.spv");
 
-        var vertShaderModule = CreateShaderModule(vertShaderCode);
-        var fragShaderModule = CreateShaderModule(fragShaderCode);
+        ShaderModule vertShaderModule = CreateShaderModule(vertShaderCode);
+        ShaderModule pixelShaderModule = CreateShaderModule(fragShaderCode);
 
         PipelineShaderStageCreateInfo vertShaderStageInfo = new()
         {
             SType = StructureType.PipelineShaderStageCreateInfo,
             Stage = ShaderStageFlags.VertexBit,
             Module = vertShaderModule,
-            PName = (byte*)SilkMarshal.StringToPtr("main")
+            PName = (byte*)SilkMarshal.StringToPtr("VSMain")
         };
 
-        PipelineShaderStageCreateInfo fragShaderStageInfo = new()
+        PipelineShaderStageCreateInfo pixelShaderStageInfo = new()
         {
             SType = StructureType.PipelineShaderStageCreateInfo,
             Stage = ShaderStageFlags.FragmentBit,
-            Module = fragShaderModule,
-            PName = (byte*)SilkMarshal.StringToPtr("main")
+            Module = pixelShaderModule,
+            PName = (byte*)SilkMarshal.StringToPtr("PSMain")
         };
 
-        var shaderStages = stackalloc[]
+        PipelineShaderStageCreateInfo* shaderStages = stackalloc[]
         {
             vertShaderStageInfo,
-            fragShaderStageInfo
+            pixelShaderStageInfo
         };
 
         PipelineVertexInputStateCreateInfo vertexInputInfo = new()
@@ -439,8 +440,8 @@ public unsafe class Renderer : IDisposable
         {
             X = 0,
             Y = 0,
-            Width = swapChainExtent.Width,
-            Height = swapChainExtent.Height,
+            Width = SwapChainExtent.Width,
+            Height = SwapChainExtent.Height,
             MinDepth = 0,
             MaxDepth = 1,
         };
@@ -448,7 +449,7 @@ public unsafe class Renderer : IDisposable
         Rect2D scissor = new()
         {
             Offset = { X = 0, Y = 0 },
-            Extent = swapChainExtent,
+            Extent = SwapChainExtent,
         };
 
         PipelineViewportStateCreateInfo viewportState = new()
@@ -506,7 +507,7 @@ public unsafe class Renderer : IDisposable
             PushConstantRangeCount = 0,
         };
 
-        if (VkAPI.API.CreatePipelineLayout(device, pipelineLayoutInfo, null, out pipelineLayout) != Result.Success)
+        if (VkAPI.API.CreatePipelineLayout(Device, in pipelineLayoutInfo, null, out pipelineLayout) != Result.Success)
         {
             throw new Exception("failed to create pipeline layout!");
         }
@@ -528,17 +529,16 @@ public unsafe class Renderer : IDisposable
             BasePipelineHandle = default
         };
 
-        if (VkAPI.API.CreateGraphicsPipelines(device, default, 1, pipelineInfo, null, out graphicsPipeline) != Result.Success)
+        if (VkAPI.API.CreateGraphicsPipelines(Device, default, 1, in pipelineInfo, null, out graphicsPipeline) != Result.Success)
         {
-            throw new Exception("failed to create graphics pipeline!");
+            throw new Exception("Failed to create graphics pipeline");
         }
 
-
-        VkAPI.API.DestroyShaderModule(device, fragShaderModule, null);
-        VkAPI.API.DestroyShaderModule(device, vertShaderModule, null);
+        VkAPI.API.DestroyShaderModule(Device, pixelShaderModule, null);
+        VkAPI.API.DestroyShaderModule(Device, vertShaderModule, null);
 
         SilkMarshal.Free((nint)vertShaderStageInfo.PName);
-        SilkMarshal.Free((nint)fragShaderStageInfo.PName);
+        SilkMarshal.Free((nint)pixelShaderStageInfo.PName);
     }
 
     private void CreateFramebuffers()
@@ -555,12 +555,12 @@ public unsafe class Renderer : IDisposable
                 RenderPass = renderPass,
                 AttachmentCount = 1,
                 PAttachments = &attachment,
-                Width = swapChainExtent.Width,
-                Height = swapChainExtent.Height,
+                Width = SwapChainExtent.Width,
+                Height = SwapChainExtent.Height,
                 Layers = 1,
             };
 
-            if (VkAPI.API.CreateFramebuffer(device, framebufferInfo, null, out swapChainFramebuffers[i]) != Result.Success)
+            if (VkAPI.API.CreateFramebuffer(Device, framebufferInfo, null, out swapChainFramebuffers[i]) != Result.Success)
             {
                 throw new Exception("failed to create framebuffer!");
             }
@@ -569,7 +569,7 @@ public unsafe class Renderer : IDisposable
 
     private void CreateCommandPool()
     {
-        var queueFamiliyIndicies = FindQueueFamilies(physicalDevice);
+        var queueFamiliyIndicies = FindQueueFamilies(PhysicalDevice);
 
         CommandPoolCreateInfo poolInfo = new()
         {
@@ -577,7 +577,7 @@ public unsafe class Renderer : IDisposable
             QueueFamilyIndex = queueFamiliyIndicies.GraphicsFamily!.Value,
         };
 
-        if (VkAPI.API.CreateCommandPool(device, poolInfo, null, out commandPool) != Result.Success)
+        if (VkAPI.API.CreateCommandPool(Device, poolInfo, null, out commandPool) != Result.Success)
         {
             throw new Exception("failed to create command pool!");
         }
@@ -597,7 +597,7 @@ public unsafe class Renderer : IDisposable
 
         fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
         {
-            if (VkAPI.API.AllocateCommandBuffers(device, allocInfo, commandBuffersPtr) != Result.Success)
+            if (VkAPI.API.AllocateCommandBuffers(Device, allocInfo, commandBuffersPtr) != Result.Success)
             {
                 throw new Exception("failed to allocate command buffers!");
             }
@@ -624,7 +624,7 @@ public unsafe class Renderer : IDisposable
                 RenderArea =
                 {
                     Offset = { X = 0, Y = 0 },
-                    Extent = swapChainExtent,
+                    Extent = SwapChainExtent,
                 }
             };
 
@@ -672,9 +672,9 @@ public unsafe class Renderer : IDisposable
 
         for (var i = 0; i < FRAMEBUFFER_COUNT; i++)
         {
-            if (VkAPI.API.CreateSemaphore(device, semaphoreInfo, null, out imageAvailableSemaphores[i]) != Result.Success ||
-                VkAPI.API.CreateSemaphore(device, semaphoreInfo, null, out renderFinishedSemaphores[i]) != Result.Success ||
-                VkAPI.API.CreateFence(device, fenceInfo, null, out inFlightFences[i]) != Result.Success)
+            if (VkAPI.API.CreateSemaphore(Device, semaphoreInfo, null, out imageAvailableSemaphores[i]) != Result.Success ||
+                VkAPI.API.CreateSemaphore(Device, semaphoreInfo, null, out renderFinishedSemaphores[i]) != Result.Success ||
+                VkAPI.API.CreateFence(Device, fenceInfo, null, out inFlightFences[i]) != Result.Success)
             {
                 throw new Exception("failed to create synchronization objects for a frame!");
             }
@@ -683,14 +683,14 @@ public unsafe class Renderer : IDisposable
 
     private void DrawFrame(double delta)
     {
-        VkAPI.API.WaitForFences(device, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
+        VkAPI.API.WaitForFences(Device, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
 
         uint imageIndex = 0;
-        khrSwapChain!.AcquireNextImage(device, swapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
+        khrSwapChain!.AcquireNextImage(Device, swapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
 
         if (imagesInFlight![imageIndex].Handle != default)
         {
-            VkAPI.API.WaitForFences(device, 1, imagesInFlight[imageIndex], true, ulong.MaxValue);
+            VkAPI.API.WaitForFences(Device, 1, imagesInFlight[imageIndex], true, ulong.MaxValue);
         }
         imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
@@ -721,7 +721,7 @@ public unsafe class Renderer : IDisposable
             PSignalSemaphores = signalSemaphores,
         };
 
-        VkAPI.API.ResetFences(device, 1, inFlightFences[currentFrame]);
+        VkAPI.API.ResetFences(Device, 1, inFlightFences[currentFrame]);
 
         if (VkAPI.API.QueueSubmit(graphicsQueue, 1, submitInfo, inFlightFences[currentFrame]) != Result.Success)
         {
@@ -762,7 +762,7 @@ public unsafe class Renderer : IDisposable
         {
             createInfo.PCode = (uint*)codePtr;
 
-            if (VkAPI.API.CreateShaderModule(device, createInfo, null, out shaderModule) != Result.Success)
+            if (VkAPI.API.CreateShaderModule(Device, createInfo, null, out shaderModule) != Result.Success)
             {
                 throw new Exception();
             }
@@ -809,7 +809,7 @@ public unsafe class Renderer : IDisposable
         {
             Vector2D<int> framebufferSize = Window.FramebufferSize;
 
-            Extent2D actualExtent = new Extent2D()
+            Extent2D actualExtent = new()
             {
                 Width = (uint)framebufferSize.X,
                 Height = (uint)framebufferSize.Y
@@ -822,21 +822,21 @@ public unsafe class Renderer : IDisposable
         }
     }
 
-    private SwapChainSupportDetails QuerySwapChainSupport(PhysicalDevice physicalDevice)
+    private SwapChainSupportDetails QuerySwapChainSupport(PhysicalDevice PhysicalDevice)
     {
-        SwapChainSupportDetails details = new SwapChainSupportDetails();
+        SwapChainSupportDetails details = new();
 
-        KhrSurface!.GetPhysicalDeviceSurfaceCapabilities(physicalDevice, Surface, out details.Capabilities);
+        KhrSurface!.GetPhysicalDeviceSurfaceCapabilities(PhysicalDevice, Surface, out details.Capabilities);
 
         uint formatCount = 0;
-        KhrSurface.GetPhysicalDeviceSurfaceFormats(physicalDevice, Surface, ref formatCount, null);
+        KhrSurface.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, null);
 
         if (formatCount != 0)
         {
             details.Formats = new SurfaceFormatKHR[formatCount];
             fixed (SurfaceFormatKHR* formatsPtr = details.Formats)
             {
-                KhrSurface.GetPhysicalDeviceSurfaceFormats(physicalDevice, Surface, ref formatCount, formatsPtr);
+                KhrSurface.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, formatsPtr);
             }
         }
         else
@@ -845,14 +845,14 @@ public unsafe class Renderer : IDisposable
         }
 
         uint presentModeCount = 0;
-        KhrSurface.GetPhysicalDeviceSurfacePresentModes(physicalDevice, Surface, ref presentModeCount, null);
+        KhrSurface.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, null);
 
         if (presentModeCount != 0)
         {
             details.PresentModes = new PresentModeKHR[presentModeCount];
             fixed (PresentModeKHR* formatsPtr = details.PresentModes)
             {
-                KhrSurface.GetPhysicalDeviceSurfacePresentModes(physicalDevice, Surface, ref presentModeCount, formatsPtr);
+                KhrSurface.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, formatsPtr);
             }
 
         }
@@ -883,12 +883,12 @@ public unsafe class Renderer : IDisposable
     private bool CheckDeviceExtensionsSupport(PhysicalDevice device)
     {
         uint extentionsCount = 0;
-        VkAPI.API.EnumerateDeviceExtensionProperties(device, (byte*)null, ref extentionsCount, null);
+        VkAPI.API.EnumerateDeviceExtensionProperties(Device, (byte*)null, ref extentionsCount, null);
 
         ExtensionProperties[] availableExtensions = new ExtensionProperties[extentionsCount];
         fixed (ExtensionProperties* availableExtensionsPtr = availableExtensions)
         {
-            VkAPI.API.EnumerateDeviceExtensionProperties(device, (byte*)null, ref extentionsCount, availableExtensionsPtr);
+            VkAPI.API.EnumerateDeviceExtensionProperties(Device, (byte*)null, ref extentionsCount, availableExtensionsPtr);
         }
 
         HashSet<string?> availableExtensionNames = availableExtensions.Select(extension => Marshal.PtrToStringAnsi((IntPtr)extension.ExtensionName)).ToHashSet();
@@ -899,7 +899,7 @@ public unsafe class Renderer : IDisposable
 
     private QueueFamilyIndices FindQueueFamilies(PhysicalDevice device)
     {
-        QueueFamilyIndices indices = new QueueFamilyIndices();
+        QueueFamilyIndices indices = new();
 
         uint queueFamilityCount = 0;
         VkAPI.API.GetPhysicalDeviceQueueFamilyProperties(device, ref queueFamilityCount, null);
@@ -909,7 +909,6 @@ public unsafe class Renderer : IDisposable
         {
             VkAPI.API.GetPhysicalDeviceQueueFamilyProperties(device, ref queueFamilityCount, queueFamiliesPtr);
         }
-
 
         uint i = 0;
         foreach (QueueFamilyProperties queueFamily in queueFamilies)
@@ -957,7 +956,7 @@ public unsafe class Renderer : IDisposable
 #if DEBUG
         if (!VkAPI.API.TryGetInstanceExtension(Instance, out DebugUtils)) return;
 
-        DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new DebugUtilsMessengerCreateInfoEXT();
+        DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new();
         debugCreateInfo.SType = StructureType.DebugUtilsMessengerCreateInfoExt;
         debugCreateInfo.MessageSeverity = DebugUtilsMessageSeverityFlagsEXT.VerboseBitExt |
                                      DebugUtilsMessageSeverityFlagsEXT.WarningBitExt |
