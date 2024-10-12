@@ -7,4 +7,3 @@
 }
 
 Console.WriteLine("Cleaned up");
-
