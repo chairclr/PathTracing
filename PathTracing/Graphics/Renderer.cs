@@ -1,4 +1,3 @@
-
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -42,27 +41,28 @@ public unsafe class Renderer : IDisposable
     private PipelineLayout pipelineLayout;
     private Pipeline graphicsPipeline;
 
-    /*private CommandPool commandPool;
-    private CommandBuffer[]? commandBuffers;*/
-
     private Buffer vertexBuffer;
     private DeviceMemory vertexBufferMemory;
 
-    /*private Semaphore[]? imageAvailableSemaphores;
-    private Semaphore[]? renderFinishedSemaphores;
-    private Fence[]? inFlightFences;
-    private Fence[]? imagesInFlight;*/
     private FrameData[] Frames = null!;
     private FrameSemaphores[] Semaphores = null!;
     private uint FrameIndex = 0;
     private uint SemaphoreIndex = 0;
 
+   
     private Vertex[] vertices = new Vertex[]
     {
-        new Vertex { pos = new Vector3(0.0f, -0.5f, 1f), uv = new Vector2(1.0f, 0.0f) },
-        new Vertex { pos = new Vector3(0.5f,  0.5f, 1f), uv = new Vector2(0.0f, 1.0f) },
-        new Vertex { pos = new Vector3(-0.5f, 0.5f, 1f), uv = new Vector2(0.0f, 0.0f) },
+        // First triangle
+        new Vertex { pos = new Vector3(-1.0f, -1.0f, 1f), uv = new Vector2(0.0f, 0.0f) }, // Bottom-left
+        new Vertex { pos = new Vector3(1.0f, -1.0f, 1f), uv = new Vector2(1.0f, 0.0f) },  // Bottom-right
+        new Vertex { pos = new Vector3(-1.0f,  1.0f, 1f), uv = new Vector2(0.0f, 1.0f) }, // Top-left
+
+        // Second triangle
+        new Vertex { pos = new Vector3(-1.0f,  1.0f, 1f), uv = new Vector2(0.0f, 1.0f) }, // Top-left (reused)
+        new Vertex { pos = new Vector3(1.0f, -1.0f, 1f), uv = new Vector2(1.0f, 0.0f) },  // Bottom-right (reused)
+        new Vertex { pos = new Vector3(1.0f,  1.0f, 1f), uv = new Vector2(1.0f, 1.0f) },  // Top-right
     };
+
 
     public Renderer(IWindow window)
     {
@@ -84,7 +84,8 @@ public unsafe class Renderer : IDisposable
         CreateCommandPool();
         CreateVertexBuffer();
         CreateCommandBuffers();
-        CreateSyncObjects();
+        CreateSemaphores();
+        CreateFences();
     }
 
     public void Update(float deltaTime)
@@ -347,7 +348,9 @@ public unsafe class Renderer : IDisposable
         CreateRenderPass();
         CreateGraphicsPipeline();
         CreateFramebuffers();
+        CreateCommandPool();
         CreateCommandBuffers();
+        CreateFences();
     }
 
     private void CleanUpSwapChain()
@@ -355,9 +358,10 @@ public unsafe class Renderer : IDisposable
         foreach (FrameData frameData in Frames)
         {
             VkAPI.API.DestroyFramebuffer(Device, frameData.Framebuffer, null);
-            VkAPI.API.DestroyCommandPool(Device, frameData.CommandPool, null);
             VkAPI.API.FreeCommandBuffers(Device, frameData.CommandPool, 1, &frameData.CommandBuffer);
+            VkAPI.API.DestroyCommandPool(Device, frameData.CommandPool, null);
             VkAPI.API.DestroyImageView(Device, frameData.SwapChainImageView, null);
+            VkAPI.API.DestroyFence(Device, frameData.Fence, null);
         }
 
         VkAPI.API.DestroyPipeline(Device, graphicsPipeline, null);
@@ -698,77 +702,15 @@ public unsafe class Renderer : IDisposable
                 }
             }
         }
-
-        /*for (int i = 0; i < commandBuffers.Length; i++)
-        {
-            CommandBufferBeginInfo beginInfo = new()
-            {
-                SType = StructureType.CommandBufferBeginInfo,
-            };
-
-            if (VkAPI.API.BeginCommandBuffer(commandBuffers[i], in beginInfo) != Result.Success)
-            {
-                throw new Exception("Failed to begin command buffer");
-            }
-
-            RenderPassBeginInfo renderPassInfo = new()
-            {
-                SType = StructureType.RenderPassBeginInfo,
-                RenderPass = renderPass,
-                Framebuffer = swapChainFramebuffers[i],
-                RenderArea =
-                {
-                    Offset = { X = 0, Y = 0 },
-                    Extent = SwapChainExtent,
-                }
-            };
-
-            ClearValue clearColor = new()
-            {
-                Color = new() { Float32_0 = 0f, Float32_1 = 0f, Float32_2 = 0f, Float32_3 = 1f },
-            };
-
-            renderPassInfo.ClearValueCount = 1;
-            renderPassInfo.PClearValues = &clearColor;
-
-            VkAPI.API.CmdBeginRenderPass(commandBuffers[i], &renderPassInfo, SubpassContents.Inline);
-
-            VkAPI.API.CmdBindPipeline(commandBuffers[i], PipelineBindPoint.Graphics, graphicsPipeline);
-
-            var vertexBuffers = new Buffer[] { vertexBuffer };
-            var offsets = new ulong[] { 0 };
-
-            fixed (ulong* offsetsPtr = offsets)
-            fixed (Buffer* vertexBuffersPtr = vertexBuffers)
-            {
-                VkAPI.API.CmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffersPtr, offsetsPtr);
-
-            }
-
-            VkAPI.API.CmdDraw(commandBuffers[i], (uint)vertices.Length, 1, 0, 0);
-
-            VkAPI.API.CmdEndRenderPass(commandBuffers[i]);
-
-            if (VkAPI.API.EndCommandBuffer(commandBuffers[i]) != Result.Success)
-            {
-                throw new Exception("failed to record command buffer!");
-            }
-        }*/
     }
 
-    private void CreateSyncObjects()
+    private void CreateSemaphores()
     {
         Semaphores = new FrameSemaphores[Frames.Length + 1];
 
         SemaphoreCreateInfo semaphoreInfo = new()
         {
             SType = StructureType.SemaphoreCreateInfo,
-        };
-
-        FenceCreateInfo fenceInfo = new()
-        {
-            SType = StructureType.FenceCreateInfo,
-            Flags = FenceCreateFlags.SignaledBit,
         };
 
         for (int i = 0; i < Frames.Length + 1; i++)
@@ -778,15 +720,25 @@ public unsafe class Renderer : IDisposable
             {
                 throw new Exception("Failed to create Semaphore for frame");
             }
+        }
+    }
 
-            if (i >= Frames.Length)
-                continue;
+    private void CreateFences()
+    {
+        FenceCreateInfo fenceInfo = new()
+        {
+            SType = StructureType.FenceCreateInfo,
+            Flags = FenceCreateFlags.SignaledBit,
+        };
 
+        for (int i = 0; i < Frames.Length; i++)
+        {
             if (VkAPI.API.CreateFence(Device, in fenceInfo, null, out Frames[i].Fence) != Result.Success)
             {
                 throw new Exception("Failed to create Fence for frame");
             }
         }
+
     }
 
     private void DrawFrame(float delta)
@@ -805,7 +757,24 @@ public unsafe class Renderer : IDisposable
         }
 
         ref FrameData frame = ref Frames[FrameIndex];
-        VkAPI.API.WaitForFences(Device, 1, frame.Fence, true, ulong.MaxValue);
+
+        if (frame.Fence.Handle != default)
+        {
+            VkAPI.API.WaitForFences(Device, 1, frame.Fence, true, ulong.MaxValue);
+        }
+        else
+        {
+            FenceCreateInfo fenceInfo = new()
+            {
+                SType = StructureType.FenceCreateInfo,
+                Flags = FenceCreateFlags.SignaledBit,
+            };
+
+            if (VkAPI.API.CreateFence(Device, in fenceInfo, null, out frame.Fence) != Result.Success)
+            {
+                throw new Exception("Failed to create Fence for frame");
+            }
+        }
 
         VkAPI.API.ResetFences(Device, 1, frame.Fence);
 
@@ -857,29 +826,6 @@ public unsafe class Renderer : IDisposable
             throw new Exception("failed to record command buffer!");
         }
 
-        /*VkAPI.API.WaitForFences(Device, 1, inFlightFences![FrameIndex], true, ulong.MaxValue);
-
-        uint imageIndex = 0;
-        Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, imageAvailableSemaphores![FrameIndex], default, ref imageIndex);
-
-        if (result == Result.ErrorOutOfDateKhr)
-        {
-            RecreateSwapChain();
-            return;
-        }
-        else if (result != Result.Success && result != Result.SuboptimalKhr)
-        {
-            throw new Exception("failed to acquire swap chain image!");
-        }
-
-        if (imagesInFlight![imageIndex].Handle != default)
-        {
-            VkAPI.API.WaitForFences(Device, 1, imagesInFlight[imageIndex], true, ulong.MaxValue);
-        }
-        imagesInFlight[imageIndex] = inFlightFences[FrameIndex];
-
-                
-        FrameIndex = (FrameIndex + 1) % MAX_FRAMES_IN_FLIGHT;*/
         // --- End ---
         SubmitInfo submitInfo = new()
         {
@@ -910,7 +856,7 @@ public unsafe class Renderer : IDisposable
 
         if (VkAPI.API.QueueSubmit(GraphicsQueue, 1, submitInfo, frame.Fence) != Result.Success)
         {
-            throw new Exception("failed to submit draw command buffer!");
+            throw new Exception("Failed to submit draw command buffer");
         }
 
         uint frameIndex = FrameIndex;
@@ -1270,7 +1216,19 @@ public unsafe class Renderer : IDisposable
     {
         if (!_disposed)
         {
-            KhrSwapChain?.DestroySwapchain(Device, SwapChain, null);
+            VkAPI.API.DeviceWaitIdle(Device);
+
+            CleanUpSwapChain();
+            
+            foreach (FrameSemaphores semaphores in Semaphores)
+            {
+                VkAPI.API.DestroySemaphore(Device, semaphores.ImageAcquiredSemaphore, null);
+                VkAPI.API.DestroySemaphore(Device, semaphores.RenderCompleteSemaphore, null);
+            }
+
+            VkAPI.API.DestroyBuffer(Device, vertexBuffer, null);
+            VkAPI.API.FreeMemory(Device, vertexBufferMemory, null);
+
             VkAPI.API.DestroyDevice(Device, null);
 
 #if DEBUG
