@@ -54,7 +54,8 @@ public unsafe class Renderer : IDisposable
     private Fence[]? imagesInFlight;*/
     private FrameData[] Frames = null!;
     private FrameSemaphores[] Semaphores = null!;
-    private int currentFrame = 0;
+    private uint FrameIndex = 0;
+    private uint SemaphoreIndex = 0;
 
     private Vertex[] vertices = new Vertex[]
     {
@@ -790,10 +791,76 @@ public unsafe class Renderer : IDisposable
 
     private void DrawFrame(float delta)
     {
-        /*VkAPI.API.WaitForFences(Device, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
+        FrameSemaphores frameSemaphores = Semaphores[SemaphoreIndex];
+        Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, frameSemaphores.ImageAcquiredSemaphore, default, ref FrameIndex);
+
+        if (result == Result.ErrorOutOfDateKhr)
+        {
+            RecreateSwapChain();
+            return;
+        }
+        else if (result != Result.Success && result != Result.SuboptimalKhr)
+        {
+            throw new Exception("failed to acquire swap chain image!");
+        }
+
+        ref FrameData frame = ref Frames[FrameIndex];
+        VkAPI.API.WaitForFences(Device, 1, frame.Fence, true, ulong.MaxValue);
+
+        VkAPI.API.ResetFences(Device, 1, frame.Fence);
+
+        // --- Begin ---
+        VkAPI.API.ResetCommandPool(Device, frame.CommandPool, CommandPoolResetFlags.None);
+        
+        CommandBufferBeginInfo commandBufferBeginInfo = new()
+        {
+            SType = StructureType.CommandBufferBeginInfo,
+            Flags = CommandBufferUsageFlags.OneTimeSubmitBit
+        };
+        VkAPI.API.BeginCommandBuffer(frame.CommandBuffer, in commandBufferBeginInfo);
+
+        RenderPassBeginInfo renderPassInfo = new()
+        {
+            SType = StructureType.RenderPassBeginInfo,
+            RenderPass = renderPass,
+            Framebuffer = frame.Framebuffer,
+            RenderArea =
+            {
+                Offset = { X = 0, Y = 0 },
+                Extent = SwapChainExtent,
+            },
+            ClearValueCount = 1,
+        };
+
+        ClearValue clearColor = new()
+        {
+            Color = new() { Float32_0 = 0f, Float32_1 = 0f, Float32_2 = 0f, Float32_3 = 1f },
+        };
+
+        renderPassInfo.PClearValues = &clearColor;
+
+        VkAPI.API.CmdBeginRenderPass(frame.CommandBuffer, in renderPassInfo, SubpassContents.Inline);
+
+        // --- Draw ---
+        VkAPI.API.CmdBindPipeline(frame.CommandBuffer, PipelineBindPoint.Graphics, graphicsPipeline);
+
+        Buffer* vertexBuffers = stackalloc[] { vertexBuffer };
+        ulong* offsets = stackalloc ulong[] { 0 };
+        VkAPI.API.CmdBindVertexBuffers(frame.CommandBuffer, 0, 1, vertexBuffers, offsets);
+
+        VkAPI.API.CmdDraw(frame.CommandBuffer, (uint)vertices.Length, 1, 0, 0);
+
+        VkAPI.API.CmdEndRenderPass(frame.CommandBuffer);
+
+        if (VkAPI.API.EndCommandBuffer(frame.CommandBuffer) != Result.Success)
+        {
+            throw new Exception("failed to record command buffer!");
+        }
+
+        /*VkAPI.API.WaitForFences(Device, 1, inFlightFences![FrameIndex], true, ulong.MaxValue);
 
         uint imageIndex = 0;
-        Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
+        Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, imageAvailableSemaphores![FrameIndex], default, ref imageIndex);
 
         if (result == Result.ErrorOutOfDateKhr)
         {
@@ -809,17 +876,20 @@ public unsafe class Renderer : IDisposable
         {
             VkAPI.API.WaitForFences(Device, 1, imagesInFlight[imageIndex], true, ulong.MaxValue);
         }
-        imagesInFlight[imageIndex] = inFlightFences[currentFrame];
+        imagesInFlight[imageIndex] = inFlightFences[FrameIndex];
 
+                
+        FrameIndex = (FrameIndex + 1) % MAX_FRAMES_IN_FLIGHT;*/
+        // --- End ---
         SubmitInfo submitInfo = new()
         {
             SType = StructureType.SubmitInfo,
         };
 
-        Semaphore* waitSemaphores = stackalloc[] { imageAvailableSemaphores[currentFrame] };
+        Semaphore* waitSemaphores = stackalloc[] { frameSemaphores.ImageAcquiredSemaphore };
         PipelineStageFlags* waitStages = stackalloc[] { PipelineStageFlags.ColorAttachmentOutputBit };
 
-        CommandBuffer buffer = commandBuffers![imageIndex];
+        CommandBuffer buffer = frame.CommandBuffer;
 
         submitInfo = submitInfo with
         {
@@ -831,37 +901,36 @@ public unsafe class Renderer : IDisposable
             PCommandBuffers = &buffer
         };
 
-        Semaphore* signalSemaphores = stackalloc[] { renderFinishedSemaphores![currentFrame] };
+        Semaphore* signalSemaphores = stackalloc[] { frameSemaphores.RenderCompleteSemaphore };
         submitInfo = submitInfo with
         {
             SignalSemaphoreCount = 1,
             PSignalSemaphores = signalSemaphores,
         };
 
-        VkAPI.API.ResetFences(Device, 1, inFlightFences[currentFrame]);
-
-        if (VkAPI.API.QueueSubmit(GraphicsQueue, 1, submitInfo, inFlightFences[currentFrame]) != Result.Success)
+        if (VkAPI.API.QueueSubmit(GraphicsQueue, 1, submitInfo, frame.Fence) != Result.Success)
         {
             throw new Exception("failed to submit draw command buffer!");
         }
 
+        uint frameIndex = FrameIndex;
         SwapchainKHR* swapChains = stackalloc[] { SwapChain };
         PresentInfoKHR presentInfo = new()
         {
             SType = StructureType.PresentInfoKhr,
 
             WaitSemaphoreCount = 1,
-            PWaitSemaphores = signalSemaphores,
+            PWaitSemaphores = &frameSemaphores.RenderCompleteSemaphore,
 
             SwapchainCount = 1,
             PSwapchains = swapChains,
 
-            PImageIndices = &imageIndex
+            PImageIndices = &frameIndex
         };
 
         result = KhrSwapChain.QueuePresent(PresentQueue, presentInfo);
 
-        if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr || frameBufferResized)
+        if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr)
         {
             //frameBufferResized = false;
             RecreateSwapChain();
@@ -871,7 +940,7 @@ public unsafe class Renderer : IDisposable
             throw new Exception("failed to present swap chain image!");
         }
 
-        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;*/
+        SemaphoreIndex = (uint)((SemaphoreIndex + 1) % Semaphores.Length);
     }
 
     private void CreateVertexBuffer()
