@@ -34,28 +34,26 @@ public unsafe class Renderer : IDisposable
 
     private KhrSwapchain? KhrSwapChain;
     private SwapchainKHR SwapChain;
-    private Image[]? SwapChainImages;
     private Format SwapChainImageFormat;
     private Extent2D SwapChainExtent;
     private const int MAX_FRAMES_IN_FLIGHT = 2;
-
-    private ImageView[]? swapChainImageViews;
-    private Framebuffer[]? swapChainFramebuffers;
 
     private RenderPass renderPass;
     private PipelineLayout pipelineLayout;
     private Pipeline graphicsPipeline;
 
-    private CommandPool commandPool;
-    private CommandBuffer[]? commandBuffers;
+    /*private CommandPool commandPool;
+    private CommandBuffer[]? commandBuffers;*/
 
     private Buffer vertexBuffer;
     private DeviceMemory vertexBufferMemory;
 
-    private Semaphore[]? imageAvailableSemaphores;
+    /*private Semaphore[]? imageAvailableSemaphores;
     private Semaphore[]? renderFinishedSemaphores;
     private Fence[]? inFlightFences;
-    private Fence[]? imagesInFlight;
+    private Fence[]? imagesInFlight;*/
+    private FrameData[] Frames = null!;
+    private FrameSemaphores[] Semaphores = null!;
     private int currentFrame = 0;
 
     private Vertex[] vertices = new Vertex[]
@@ -311,10 +309,18 @@ public unsafe class Renderer : IDisposable
         }
 
         KhrSwapChain.GetSwapchainImages(Device, SwapChain, ref imageCount, null);
-        SwapChainImages = new Image[imageCount];
-        fixed (Image* SwapChainImagesPtr = SwapChainImages)
+
+        Frames = new FrameData[imageCount];
+
+        Image[] swapChainImages = new Image[Frames.Length];
+        fixed (Image* swapChainImagesPtr = swapChainImages)
         {
-            KhrSwapChain.GetSwapchainImages(Device, SwapChain, ref imageCount, SwapChainImagesPtr);
+            KhrSwapChain.GetSwapchainImages(Device, SwapChain, ref imageCount, swapChainImagesPtr);
+        }
+
+        for (int i = 0; i < Frames.Length; i++)
+        {
+            Frames[i].SwapChainImage = swapChainImages[i];
         }
 
         SwapChainImageFormat = surfaceFormat.Format;
@@ -341,44 +347,33 @@ public unsafe class Renderer : IDisposable
         CreateGraphicsPipeline();
         CreateFramebuffers();
         CreateCommandBuffers();
-
-        imagesInFlight = new Fence[SwapChainImages!.Length];
     }
 
     private void CleanUpSwapChain()
     {
-        foreach (Framebuffer framebuffer in swapChainFramebuffers!)
+        foreach (FrameData frameData in Frames)
         {
-            VkAPI.API.DestroyFramebuffer(Device, framebuffer, null);
-        }
-
-        fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
-        {
-            VkAPI.API.FreeCommandBuffers(Device, commandPool, (uint)commandBuffers!.Length, commandBuffersPtr);
+            VkAPI.API.DestroyFramebuffer(Device, frameData.Framebuffer, null);
+            VkAPI.API.DestroyCommandPool(Device, frameData.CommandPool, null);
+            VkAPI.API.FreeCommandBuffers(Device, frameData.CommandPool, 1, &frameData.CommandBuffer);
+            VkAPI.API.DestroyImageView(Device, frameData.SwapChainImageView, null);
         }
 
         VkAPI.API.DestroyPipeline(Device, graphicsPipeline, null);
         VkAPI.API.DestroyPipelineLayout(Device, pipelineLayout, null);
         VkAPI.API.DestroyRenderPass(Device, renderPass, null);
 
-        foreach (ImageView imageView in swapChainImageViews!)
-        {
-            VkAPI.API.DestroyImageView(Device, imageView, null);
-        }
-
         KhrSwapChain!.DestroySwapchain(Device, SwapChain, null);
     }
 
     private void CreateImageViews()
     {
-        swapChainImageViews = new ImageView[SwapChainImages!.Length];
-
-        for (int i = 0; i < SwapChainImages.Length; i++)
+        for (int i = 0; i < Frames.Length; i++)
         {
             ImageViewCreateInfo createInfo = new()
             {
                 SType = StructureType.ImageViewCreateInfo,
-                Image = SwapChainImages[i],
+                Image = Frames[i].SwapChainImage,
                 ViewType = ImageViewType.Type2D,
                 Format = SwapChainImageFormat,
                 Components =
@@ -399,7 +394,7 @@ public unsafe class Renderer : IDisposable
 
             };
 
-            if (VkAPI.API.CreateImageView(Device, in createInfo, null, out swapChainImageViews[i]) != Result.Success)
+            if (VkAPI.API.CreateImageView(Device, in createInfo, null, out Frames[i].SwapChainImageView) != Result.Success)
             {
                 throw new Exception("Failed to create image views");
             }
@@ -641,11 +636,9 @@ public unsafe class Renderer : IDisposable
 
     private void CreateFramebuffers()
     {
-        swapChainFramebuffers = new Framebuffer[swapChainImageViews!.Length];
-
-        for (int i = 0; i < swapChainImageViews.Length; i++)
+        for (int i = 0; i < Frames.Length; i++)
         {
-            ImageView attachment = swapChainImageViews[i];
+            ImageView attachment = Frames[i].SwapChainImageView;
 
             FramebufferCreateInfo framebufferInfo = new()
             {
@@ -658,9 +651,9 @@ public unsafe class Renderer : IDisposable
                 Layers = 1,
             };
 
-            if (VkAPI.API.CreateFramebuffer(Device, in framebufferInfo, null, out swapChainFramebuffers[i]) != Result.Success)
+            if (VkAPI.API.CreateFramebuffer(Device, in framebufferInfo, null, out Frames[i].Framebuffer) != Result.Success)
             {
-                throw new Exception("failed to create framebuffer!");
+                throw new Exception("Failed to create Framebuffer");
             }
         }
     }
@@ -675,33 +668,37 @@ public unsafe class Renderer : IDisposable
             QueueFamilyIndex = queueFamiliyIndicies.GraphicsFamily!.Value,
         };
 
-        if (VkAPI.API.CreateCommandPool(Device, in poolInfo, null, out commandPool) != Result.Success)
+        for (int i = 0; i < Frames.Length; i++)
         {
-            throw new Exception("failed to create command pool!");
+            if (VkAPI.API.CreateCommandPool(Device, in poolInfo, null, out Frames[i].CommandPool) != Result.Success)
+            {
+                throw new Exception("Failed to create command pool");
+            }
         }
     }
 
     private void CreateCommandBuffers()
     {
-        commandBuffers = new CommandBuffer[swapChainFramebuffers!.Length];
-
-        CommandBufferAllocateInfo allocInfo = new()
+        for (int i = 0; i < Frames.Length; i++)
         {
-            SType = StructureType.CommandBufferAllocateInfo,
-            CommandPool = commandPool,
-            Level = CommandBufferLevel.Primary,
-            CommandBufferCount = (uint)commandBuffers.Length,
-        };
-
-        fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
-        {
-            if (VkAPI.API.AllocateCommandBuffers(Device, in allocInfo, commandBuffersPtr) != Result.Success)
+            CommandBufferAllocateInfo allocInfo = new()
             {
-                throw new Exception("failed to allocate command buffers!");
+                SType = StructureType.CommandBufferAllocateInfo,
+                CommandPool = Frames[i].CommandPool,
+                Level = CommandBufferLevel.Primary,
+                CommandBufferCount = 1,
+            };
+
+            fixed (CommandBuffer* commandBuffersPtr = &Frames[i].CommandBuffer)
+            {
+                if (VkAPI.API.AllocateCommandBuffers(Device, in allocInfo, commandBuffersPtr) != Result.Success)
+                {
+                    throw new Exception("Failed to allocate command buffers");
+                }
             }
         }
 
-        for (int i = 0; i < commandBuffers.Length; i++)
+        /*for (int i = 0; i < commandBuffers.Length; i++)
         {
             CommandBufferBeginInfo beginInfo = new()
             {
@@ -755,15 +752,12 @@ public unsafe class Renderer : IDisposable
             {
                 throw new Exception("failed to record command buffer!");
             }
-        }
+        }*/
     }
 
     private void CreateSyncObjects()
     {
-        imageAvailableSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
-        renderFinishedSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
-        inFlightFences = new Fence[MAX_FRAMES_IN_FLIGHT];
-        imagesInFlight = new Fence[SwapChainImages!.Length];
+        Semaphores = new FrameSemaphores[Frames.Length + 1];
 
         SemaphoreCreateInfo semaphoreInfo = new()
         {
@@ -776,20 +770,27 @@ public unsafe class Renderer : IDisposable
             Flags = FenceCreateFlags.SignaledBit,
         };
 
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for (int i = 0; i < Frames.Length + 1; i++)
         {
-            if (VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out imageAvailableSemaphores[i]) != Result.Success ||
-                VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out renderFinishedSemaphores[i]) != Result.Success ||
-                VkAPI.API.CreateFence(Device, in fenceInfo, null, out inFlightFences[i]) != Result.Success)
+            if (VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out Semaphores[i].ImageAcquiredSemaphore) != Result.Success ||
+                VkAPI.API.CreateSemaphore(Device, in semaphoreInfo, null, out Semaphores[i].RenderCompleteSemaphore) != Result.Success)
             {
-                throw new Exception("failed to create synchronization objects for a frame!");
+                throw new Exception("Failed to create Semaphore for frame");
+            }
+
+            if (i >= Frames.Length)
+                continue;
+
+            if (VkAPI.API.CreateFence(Device, in fenceInfo, null, out Frames[i].Fence) != Result.Success)
+            {
+                throw new Exception("Failed to create Fence for frame");
             }
         }
     }
 
     private void DrawFrame(float delta)
     {
-        VkAPI.API.WaitForFences(Device, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
+        /*VkAPI.API.WaitForFences(Device, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
 
         uint imageIndex = 0;
         Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref imageIndex);
@@ -860,7 +861,7 @@ public unsafe class Renderer : IDisposable
 
         result = KhrSwapChain.QueuePresent(PresentQueue, presentInfo);
 
-        if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr /*|| frameBufferResized*/)
+        if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr || frameBufferResized)
         {
             //frameBufferResized = false;
             RecreateSwapChain();
@@ -870,7 +871,7 @@ public unsafe class Renderer : IDisposable
             throw new Exception("failed to present swap chain image!");
         }
 
-        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;*/
     }
 
     private void CreateVertexBuffer()
@@ -1125,7 +1126,7 @@ public unsafe class Renderer : IDisposable
         string[] extensions = SilkMarshal.PtrToStringArray((nint)glfwExtensions, (int)glfwExtensionCount);
 
 #if DEBUG
-        return [..extensions, ExtDebugUtils.ExtensionName];
+        return [.. extensions, ExtDebugUtils.ExtensionName];
 #else
         return extensions;
 #endif
@@ -1204,7 +1205,7 @@ public unsafe class Renderer : IDisposable
             VkAPI.API.DestroyDevice(Device, null);
 
 #if DEBUG
-            DebugUtils?.DestroyDebugUtilsMessenger(Instance, DebugMessenger, null); 
+            DebugUtils?.DestroyDebugUtilsMessenger(Instance, DebugMessenger, null);
 #endif
             KhrSurface?.DestroySurface(Instance, Surface, null);
             VkAPI.API.DestroyInstance(Instance, null);
@@ -1218,8 +1219,8 @@ public unsafe class Renderer : IDisposable
         public CommandPool CommandPool;
         public CommandBuffer CommandBuffer;
         public Fence Fence;
-        public Image RenderTarget;
-        public ImageView RenderTargetView;
+        public Image SwapChainImage;
+        public ImageView SwapChainImageView;
         public Framebuffer Framebuffer;
     }
 
