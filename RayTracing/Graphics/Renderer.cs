@@ -1,7 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using PathTracing.Logging;
+using RayTracing.Logging;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Maths;
@@ -12,7 +12,7 @@ using Silk.NET.Windowing;
 using Buffer = Silk.NET.Vulkan.Buffer;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 
-namespace PathTracing.Graphics;
+namespace RayTracing.Graphics;
 
 public unsafe class Renderer : IDisposable
 {
@@ -47,6 +47,9 @@ public unsafe class Renderer : IDisposable
 
     private Pipeline ComputePipeline;
     private PipelineLayout ComputePipelineLayout;
+    private Fence ComputeFence;
+    private CommandPool ComputeCommandPool;
+    private CommandBuffer ComputeCommandBuffer;
 
     private Vertex[] vertices = new Vertex[]
     {
@@ -97,15 +100,6 @@ public unsafe class Renderer : IDisposable
 
     }
 
-    public void Render(float deltaTime)
-    {
-        DrawFrame(deltaTime);
-    }
-
-    private Image TestImage;
-    private DeviceMemory ImageMemory;
-    private ImageView TestImageView;
-
     private Image ComputeImage;
     private DeviceMemory ComputeImageMemory;
     private ImageView ComputeImageView;
@@ -140,7 +134,7 @@ public unsafe class Renderer : IDisposable
             {
                 SType = StructureType.ImageCreateInfo,
                 Format = Format.R8G8B8A8Unorm,
-                Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit | ImageUsageFlags.TransferDstBit,
+                Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit,
                 Extent = new Extent3D()
                 {
                     Width = (uint)Window.FramebufferSize.X,
@@ -153,69 +147,6 @@ public unsafe class Renderer : IDisposable
                 ArrayLayers = 1,
                 InitialLayout = ImageLayout.Undefined,
                 Tiling = ImageTiling.Optimal,
-                SharingMode = SharingMode.Exclusive
-            };
-
-            VkAPI.API.CreateImage(Device, in imageCreateInfo, null, out TestImage);
-
-            MemoryRequirements memRequirements = new();
-            VkAPI.API.GetImageMemoryRequirements(Device, TestImage, out memRequirements);
-
-            MemoryAllocateInfo allocateInfo = new()
-            {
-                SType = StructureType.MemoryAllocateInfo,
-                AllocationSize = memRequirements.Size,
-                MemoryTypeIndex = GraphicsDevice.FindMemoryType(memRequirements.MemoryTypeBits, MemoryPropertyFlags.None),
-            };
-
-            fixed (DeviceMemory* imageMemoryPtr = &ImageMemory)
-            {
-                if (VkAPI.API.AllocateMemory(Device, allocateInfo, null, imageMemoryPtr) != Result.Success)
-                {
-                    throw new Exception("failed to allocate image memory!");
-                }
-            }
-
-            VkAPI.API.BindImageMemory(Device, TestImage, ImageMemory, 0);
-
-            ImageViewCreateInfo viewCreateInfo = new()
-            {
-                SType = StructureType.ImageViewCreateInfo,
-                Image = TestImage,
-                ViewType = ImageViewType.Type2D,
-                Format = Format.R8G8B8A8Unorm,
-                SubresourceRange = new ImageSubresourceRange()
-                {
-                    AspectMask = ImageAspectFlags.ColorBit,
-                    BaseMipLevel = 0,
-                    LevelCount = 1,
-                    BaseArrayLayer = 0,
-                    LayerCount = 1,
-                },
-            };
-
-            VkAPI.API.CreateImageView(Device, in viewCreateInfo, null, out TestImageView);
-        }
-
-        {
-            ImageCreateInfo imageCreateInfo = new()
-            {
-                SType = StructureType.ImageCreateInfo,
-                Format = Format.R8G8B8A8Unorm,
-                Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit | ImageUsageFlags.TransferDstBit,
-                Extent = new Extent3D()
-                {
-                    Width = (uint)Window.FramebufferSize.X,
-                    Height = (uint)Window.FramebufferSize.Y,
-                    Depth = 1
-                },
-                ImageType = ImageType.Type2D,
-                Samples = SampleCountFlags.Count1Bit,
-                MipLevels = 1,
-                ArrayLayers = 1,
-                InitialLayout = ImageLayout.Undefined,
-                Tiling = ImageTiling.Optimal,
-                SharingMode = SharingMode.Exclusive
             };
 
             VkAPI.API.CreateImage(Device, in imageCreateInfo, null, out ComputeImage);
@@ -243,7 +174,7 @@ public unsafe class Renderer : IDisposable
             ImageViewCreateInfo viewCreateInfo = new()
             {
                 SType = StructureType.ImageViewCreateInfo,
-                Image = TestImage,
+                Image = ComputeImage,
                 ViewType = ImageViewType.Type2D,
                 Format = Format.R8G8B8A8Unorm,
                 SubresourceRange = new ImageSubresourceRange()
@@ -273,12 +204,7 @@ public unsafe class Renderer : IDisposable
 
         VkAPI.API.CreateSampler(Device, in samplerCreateInfo, null, out TestSampler);
 
-        TransitionImageLayout(TestImage, Format.R8G8B8A8Unorm, ImageLayout.Undefined, ImageLayout.TransferDstOptimal);
-        //copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-        TransitionImageLayout(TestImage, Format.R8G8B8A8Unorm, ImageLayout.TransferDstOptimal, ImageLayout.ShaderReadOnlyOptimal);
-
-        TransitionImageLayout(ComputeImage, Format.R8G8B8A8Unorm, ImageLayout.Undefined, ImageLayout.TransferDstOptimal);
-        TransitionImageLayout(ComputeImage, Format.R8G8B8A8Unorm, ImageLayout.TransferDstOptimal, ImageLayout.General);
+        TransitionImageLayout(ComputeImage, Format.R8G8B8A8Unorm, ImageLayout.Undefined, ImageLayout.General);
     }
 
     private void TransitionImageLayout(Image image, Format format, ImageLayout oldLayout, ImageLayout newLayout)
@@ -339,12 +265,12 @@ public unsafe class Renderer : IDisposable
             sourceStage = PipelineStageFlags.TransferBit;
             destinationStage = PipelineStageFlags.FragmentShaderBit;
         }
-        else if (oldLayout == ImageLayout.TransferDstOptimal && newLayout == ImageLayout.General)
+        else if (oldLayout == ImageLayout.Undefined && newLayout == ImageLayout.General)
         {
-            barrier.SrcAccessMask = AccessFlags.TransferWriteBit;
+            barrier.SrcAccessMask = 0;
             barrier.DstAccessMask = AccessFlags.ShaderWriteBit;
 
-            sourceStage = PipelineStageFlags.TransferBit;
+            sourceStage = PipelineStageFlags.TopOfPipeBit;
             destinationStage = PipelineStageFlags.ComputeShaderBit;
         }
         else
@@ -380,7 +306,7 @@ public unsafe class Renderer : IDisposable
     {
         DescriptorSetLayoutBinding imageLayoutBinding = new()
         {
-            Binding = 1,
+            Binding = 0,
             DescriptorCount = 1,
             DescriptorType = DescriptorType.StorageImage,
             PImmutableSamplers = null,
@@ -430,7 +356,7 @@ public unsafe class Renderer : IDisposable
         {
             SType = StructureType.WriteDescriptorSet,
             DstSet = ComputeDescriptorSet,
-            DstBinding = 1,
+            DstBinding = 0,
             DstArrayElement = 0,
             DescriptorType = DescriptorType.StorageImage,
             DescriptorCount = 1,
@@ -478,33 +404,32 @@ public unsafe class Renderer : IDisposable
             {
                 throw new Exception("Fuck");
             }
+
+        FenceCreateInfo fenceInfo = new()
+        {
+            SType = StructureType.FenceCreateInfo,
+            Flags = FenceCreateFlags.SignaledBit,
+        };
+
+        VkAPI.API.CreateFence(Device, in fenceInfo, null, out ComputeFence);
     }
 
     private void CreateDescriptorSetLayout()
     {
-        DescriptorSetLayoutBinding uboLayoutBinding = new()
-        {
-            Binding = 0,
-            DescriptorCount = 1,
-            DescriptorType = DescriptorType.UniformBuffer,
-            PImmutableSamplers = null,
-            StageFlags = ShaderStageFlags.FragmentBit,
-        };
-
         DescriptorSetLayoutBinding samplerLayoutBinding = new()
         {
-            Binding = 1,
+            Binding = 0,
             DescriptorCount = 1,
             DescriptorType = DescriptorType.CombinedImageSampler,
             PImmutableSamplers = null,
             StageFlags = ShaderStageFlags.FragmentBit,
         };
 
-        DescriptorSetLayoutBinding* bindings = stackalloc[] { uboLayoutBinding, samplerLayoutBinding };
+        DescriptorSetLayoutBinding* bindings = stackalloc[] { samplerLayoutBinding };
         DescriptorSetLayoutCreateInfo layoutInfo = new()
         {
             SType = StructureType.DescriptorSetLayoutCreateInfo,
-            BindingCount = 2,
+            BindingCount = 1,
             PBindings = bindings,
         };
 
@@ -559,8 +484,8 @@ public unsafe class Renderer : IDisposable
         {
             DescriptorImageInfo imageInfo = new()
             {
-                ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
-                ImageView = TestImageView,
+                ImageLayout = ImageLayout.General,
+                ImageView = ComputeImageView,
                 Sampler = TestSampler,
             };
 
@@ -568,7 +493,7 @@ public unsafe class Renderer : IDisposable
             {
                 SType = StructureType.WriteDescriptorSet,
                 DstSet = sets[i],
-                DstBinding = 1,
+                DstBinding = 0,
                 DstArrayElement = 0,
                 DescriptorType = DescriptorType.CombinedImageSampler,
                 DescriptorCount = 1,
@@ -1084,6 +1009,11 @@ public unsafe class Renderer : IDisposable
                 throw new Exception("Failed to create command pool");
             }
         }
+
+        if (VkAPI.API.CreateCommandPool(Device, in poolInfo, null, out ComputeCommandPool) != Result.Success)
+        {
+            throw new Exception("Failed to create command pool");
+        }
     }
 
     private void CreateCommandBuffers()
@@ -1099,6 +1029,24 @@ public unsafe class Renderer : IDisposable
             };
 
             fixed (CommandBuffer* commandBuffersPtr = &Frames[i].CommandBuffer)
+            {
+                if (VkAPI.API.AllocateCommandBuffers(Device, in allocInfo, commandBuffersPtr) != Result.Success)
+                {
+                    throw new Exception("Failed to allocate command buffers");
+                }
+            }
+        }
+
+        {
+            CommandBufferAllocateInfo allocInfo = new()
+            {
+                SType = StructureType.CommandBufferAllocateInfo,
+                CommandPool = ComputeCommandPool,
+                Level = CommandBufferLevel.Primary,
+                CommandBufferCount = 1,
+            };
+
+            fixed (CommandBuffer* commandBuffersPtr = &ComputeCommandBuffer)
             {
                 if (VkAPI.API.AllocateCommandBuffers(Device, in allocInfo, commandBuffersPtr) != Result.Success)
                 {
@@ -1144,8 +1092,58 @@ public unsafe class Renderer : IDisposable
         }
     }
 
+    public void Render(float delta)
+    {
+        VkAPI.API.ResetFences(Device, 1, ComputeFence);
+        ComputeFrame(delta);
+        VkAPI.API.WaitForFences(Device, 1, ComputeFence, true, ulong.MaxValue);
+
+        DrawFrame(delta);
+    }
+
+    private void ComputeFrame(float delta)
+    {
+        VkAPI.API.ResetCommandPool(Device, ComputeCommandPool, CommandPoolResetFlags.None);
+
+        CommandBufferBeginInfo commandBufferBeginInfo = new()
+        {
+            SType = StructureType.CommandBufferBeginInfo,
+            Flags = CommandBufferUsageFlags.OneTimeSubmitBit
+        };
+        VkAPI.API.BeginCommandBuffer(ComputeCommandBuffer, in commandBufferBeginInfo);
+
+        VkAPI.API.CmdBindDescriptorSets(ComputeCommandBuffer, PipelineBindPoint.Compute, ComputePipelineLayout, 0, 1, ComputeDescriptorSet, 0, 0);
+
+        VkAPI.API.CmdBindPipeline(ComputeCommandBuffer, PipelineBindPoint.Compute, ComputePipeline);
+        VkAPI.API.CmdDispatch(ComputeCommandBuffer, (uint)MathF.Ceiling(1920f / 32f), (uint)MathF.Ceiling(1080f / 32f), 1);
+
+        if (VkAPI.API.EndCommandBuffer(ComputeCommandBuffer) != Result.Success)
+        {
+            throw new Exception("failed to record command buffer!");
+        }
+        SubmitInfo submitInfo = new()
+        {
+            SType = StructureType.SubmitInfo,
+        };
+
+        CommandBuffer buffer = ComputeCommandBuffer;
+
+        submitInfo = submitInfo with
+        {
+            WaitSemaphoreCount = 0,
+            CommandBufferCount = 1,
+            PCommandBuffers = &buffer,
+        };
+
+        if (VkAPI.API.QueueSubmit(GraphicsDevice.ComputeQueue, 1, submitInfo, ComputeFence) != Result.Success)
+        {
+            throw new Exception("Failed to submit draw command buffer");
+        }
+    }
+
     private void DrawFrame(float delta)
     {
+        Logger.LogInformation($"Guh: {1 / delta}");
         FrameSemaphores frameSemaphores = Semaphores[SemaphoreIndex];
         Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, frameSemaphores.ImageAcquiredSemaphore, default, ref FrameIndex);
 
@@ -1211,12 +1209,6 @@ public unsafe class Renderer : IDisposable
 
         renderPassInfo.PClearValues = &clearColor;
 
-        // --- Compute ---
-        VkAPI.API.CmdBindDescriptorSets(frame.CommandBuffer, PipelineBindPoint.Compute, ComputePipelineLayout, 0, 1, ComputeDescriptorSet, 0, 0);
-
-        VkAPI.API.CmdBindPipeline(frame.CommandBuffer, PipelineBindPoint.Compute, ComputePipeline);
-        VkAPI.API.CmdDispatch(frame.CommandBuffer, 1, 1, 1);
-
         // --- Draw ---
         VkAPI.API.CmdBindPipeline(frame.CommandBuffer, PipelineBindPoint.Graphics, graphicsPipeline);
 
@@ -1238,7 +1230,6 @@ public unsafe class Renderer : IDisposable
             throw new Exception("failed to record command buffer!");
         }
 
-        // --- End ---
         SubmitInfo submitInfo = new()
         {
             SType = StructureType.SubmitInfo,
@@ -1392,7 +1383,7 @@ public unsafe class Renderer : IDisposable
             }
         }
 
-        return PresentModeKHR.FifoKhr;
+        return PresentModeKHR.ImmediateKhr;
     }
 
     private Extent2D ChooseSwapExtent(SurfaceCapabilitiesKHR capabilities)

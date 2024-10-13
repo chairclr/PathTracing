@@ -1,8 +1,8 @@
 #include "Common.hlsl"
 
-[[vk::binding(1, 0)]]
+[[vk::binding(0, 0)]]
 SamplerState SamplerView : SAMPLER : register(s0);
-[[vk::binding(1, 0)]]
+[[vk::binding(0, 0)]]
 Texture2D MainTextureView : TEXTURE : register(t0);
 
 PS_OUTPUT PSMain(PS_INPUT input)

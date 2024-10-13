@@ -1,8 +1,8 @@
 using Silk.NET.Windowing;
-using PathTracing.Graphics;
+using RayTracing.Graphics;
 using Silk.NET.Maths;
 
-namespace PathTracing;
+namespace RayTracing;
 
 public class App : IDisposable
 {

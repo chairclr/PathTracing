@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Silk.NET.Vulkan;
 
-namespace PathTracing.Graphics;
+namespace RayTracing.Graphics;
 
 [StructLayout(LayoutKind.Sequential)]
 public struct Vertex

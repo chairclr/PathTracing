@@ -1,4 +1,4 @@
-﻿using PathTracing;
+﻿using RayTracing;
 
 {
     using App app = new App();

@@ -5,8 +5,8 @@
             "name": ".NET Core Launch (console)",
             "type": "netcoredbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/Debug/net8.0/PathTracing.dll",
-            "cwd": "${workspaceFolder}/PathTracing/bin/Debug/net8.0",
+            "program": "${workspaceFolder}/bin/Debug/net8.0/RayTracing.dll",
+            "cwd": "${workspaceFolder}/RayTracing/bin/Debug/net8.0",
             "console": "internalConsole",
             "stopAtEntry": false
         }

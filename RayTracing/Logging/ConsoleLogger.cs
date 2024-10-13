@@ -1,4 +1,4 @@
-namespace PathTracing.Logging;
+namespace RayTracing.Logging;
 
 internal class ConsoleLogger : ILogger
 {

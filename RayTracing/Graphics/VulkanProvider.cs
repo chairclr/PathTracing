@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
 
-namespace PathTracing.Graphics;
+namespace RayTracing.Graphics;
 
 public class VkAPI
 {

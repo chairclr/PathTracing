@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace PathTracing.Logging;
+namespace RayTracing.Logging;
 
 public class Logger
 {
