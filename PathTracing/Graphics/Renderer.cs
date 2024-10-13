@@ -45,6 +45,9 @@ public unsafe class Renderer : IDisposable
     private uint FrameIndex = 0;
     private uint SemaphoreIndex = 0;
 
+    private Pipeline ComputePipeline;
+    private PipelineLayout ComputePipelineLayout;
+
     private Vertex[] vertices = new Vertex[]
     {
         // First triangle
@@ -74,6 +77,11 @@ public unsafe class Renderer : IDisposable
         CreateSwapChain();
         CreateImageViews();
         CreateRenderPass();
+
+        CreateResources();
+        CreateDescriptorSetLayout();
+        CreateDescriptorSets();
+
         CreateGraphicsPipeline();
         CreateFramebuffers();
         CreateCommandPool();
@@ -81,7 +89,7 @@ public unsafe class Renderer : IDisposable
         CreateCommandBuffers();
         CreateSemaphores();
         CreateFences();
-        CreateResources();
+        CreateComputePipeline();
     }
 
     public void Update(float deltaTime)
@@ -95,30 +103,482 @@ public unsafe class Renderer : IDisposable
     }
 
     private Image TestImage;
+    private DeviceMemory ImageMemory;
+    private ImageView TestImageView;
+
+    private Image ComputeImage;
+    private DeviceMemory ComputeImageMemory;
+    private ImageView ComputeImageView;
+
+    private Sampler TestSampler;
+
+    private DescriptorSetLayout descriptorSetLayout;
+    private DescriptorPool DescriptorPool;
+
+    private DescriptorSetLayout ComputeDescriptorSetLayout;
+    private DescriptorSet ComputeDescriptorSet;
+
+    private CommandPool CommandPool;
 
     private void CreateResources()
     {
-        ImageCreateInfo imageCreateInfo = new()
+        GraphicsDevice.QueueFamilyIndices queueFamiliyIndicies = GraphicsDevice.FindQueueFamilies(GraphicsDevice.PhysicalDevice);
+
+        CommandPoolCreateInfo poolInfo = new()
         {
-            SType = StructureType.ImageCreateInfo,
-            Format = Format.R8G8B8A8Unorm,
-            Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit,
-            Extent = new Extent3D()
-            {
-                Width = (uint)Window.FramebufferSize.X,
-                Height = (uint)Window.FramebufferSize.Y,
-                Depth = 1
-            },
-            ImageType = ImageType.Type2D,
-            Samples = SampleCountFlags.Count1Bit,
-            MipLevels = 1,
-            ArrayLayers = 1,
-            InitialLayout = ImageLayout.Undefined,
-            Tiling = ImageTiling.Optimal,
-            SharingMode = SharingMode.Exclusive
+            SType = StructureType.CommandPoolCreateInfo,
+            QueueFamilyIndex = queueFamiliyIndicies.GraphicsAndComputeFamily!.Value,
         };
 
-        VkAPI.API.CreateImage(Device, in imageCreateInfo, null, out TestImage);
+        if (VkAPI.API.CreateCommandPool(Device, in poolInfo, null, out CommandPool) != Result.Success)
+        {
+            throw new Exception("Failed to create command pool");
+        }
+
+        {
+            ImageCreateInfo imageCreateInfo = new()
+            {
+                SType = StructureType.ImageCreateInfo,
+                Format = Format.R8G8B8A8Unorm,
+                Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit | ImageUsageFlags.TransferDstBit,
+                Extent = new Extent3D()
+                {
+                    Width = (uint)Window.FramebufferSize.X,
+                    Height = (uint)Window.FramebufferSize.Y,
+                    Depth = 1
+                },
+                ImageType = ImageType.Type2D,
+                Samples = SampleCountFlags.Count1Bit,
+                MipLevels = 1,
+                ArrayLayers = 1,
+                InitialLayout = ImageLayout.Undefined,
+                Tiling = ImageTiling.Optimal,
+                SharingMode = SharingMode.Exclusive
+            };
+
+            VkAPI.API.CreateImage(Device, in imageCreateInfo, null, out TestImage);
+
+            MemoryRequirements memRequirements = new();
+            VkAPI.API.GetImageMemoryRequirements(Device, TestImage, out memRequirements);
+
+            MemoryAllocateInfo allocateInfo = new()
+            {
+                SType = StructureType.MemoryAllocateInfo,
+                AllocationSize = memRequirements.Size,
+                MemoryTypeIndex = GraphicsDevice.FindMemoryType(memRequirements.MemoryTypeBits, MemoryPropertyFlags.None),
+            };
+
+            fixed (DeviceMemory* imageMemoryPtr = &ImageMemory)
+            {
+                if (VkAPI.API.AllocateMemory(Device, allocateInfo, null, imageMemoryPtr) != Result.Success)
+                {
+                    throw new Exception("failed to allocate image memory!");
+                }
+            }
+
+            VkAPI.API.BindImageMemory(Device, TestImage, ImageMemory, 0);
+
+            ImageViewCreateInfo viewCreateInfo = new()
+            {
+                SType = StructureType.ImageViewCreateInfo,
+                Image = TestImage,
+                ViewType = ImageViewType.Type2D,
+                Format = Format.R8G8B8A8Unorm,
+                SubresourceRange = new ImageSubresourceRange()
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1,
+                },
+            };
+
+            VkAPI.API.CreateImageView(Device, in viewCreateInfo, null, out TestImageView);
+        }
+
+        {
+            ImageCreateInfo imageCreateInfo = new()
+            {
+                SType = StructureType.ImageCreateInfo,
+                Format = Format.R8G8B8A8Unorm,
+                Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit | ImageUsageFlags.TransferDstBit,
+                Extent = new Extent3D()
+                {
+                    Width = (uint)Window.FramebufferSize.X,
+                    Height = (uint)Window.FramebufferSize.Y,
+                    Depth = 1
+                },
+                ImageType = ImageType.Type2D,
+                Samples = SampleCountFlags.Count1Bit,
+                MipLevels = 1,
+                ArrayLayers = 1,
+                InitialLayout = ImageLayout.Undefined,
+                Tiling = ImageTiling.Optimal,
+                SharingMode = SharingMode.Exclusive
+            };
+
+            VkAPI.API.CreateImage(Device, in imageCreateInfo, null, out ComputeImage);
+
+            MemoryRequirements memRequirements = new();
+            VkAPI.API.GetImageMemoryRequirements(Device, ComputeImage, out memRequirements);
+
+            MemoryAllocateInfo allocateInfo = new()
+            {
+                SType = StructureType.MemoryAllocateInfo,
+                AllocationSize = memRequirements.Size,
+                MemoryTypeIndex = GraphicsDevice.FindMemoryType(memRequirements.MemoryTypeBits, MemoryPropertyFlags.None),
+            };
+
+            fixed (DeviceMemory* imageMemoryPtr = &ComputeImageMemory)
+            {
+                if (VkAPI.API.AllocateMemory(Device, allocateInfo, null, imageMemoryPtr) != Result.Success)
+                {
+                    throw new Exception("failed to allocate image memory!");
+                }
+            }
+
+            VkAPI.API.BindImageMemory(Device, ComputeImage, ComputeImageMemory, 0);
+
+            ImageViewCreateInfo viewCreateInfo = new()
+            {
+                SType = StructureType.ImageViewCreateInfo,
+                Image = TestImage,
+                ViewType = ImageViewType.Type2D,
+                Format = Format.R8G8B8A8Unorm,
+                SubresourceRange = new ImageSubresourceRange()
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1,
+                },
+            };
+
+            VkAPI.API.CreateImageView(Device, in viewCreateInfo, null, out ComputeImageView);
+        }
+
+        SamplerCreateInfo samplerCreateInfo = new SamplerCreateInfo()
+        {
+            SType = StructureType.SamplerCreateInfo,
+            MagFilter = Filter.Nearest,
+            MinFilter = Filter.Nearest,
+            AddressModeU = SamplerAddressMode.Repeat,
+            AddressModeV = SamplerAddressMode.Repeat,
+            AddressModeW = SamplerAddressMode.Repeat,
+            AnisotropyEnable = false,
+            MaxAnisotropy = 1.0f
+        };
+
+        VkAPI.API.CreateSampler(Device, in samplerCreateInfo, null, out TestSampler);
+
+        TransitionImageLayout(TestImage, Format.R8G8B8A8Unorm, ImageLayout.Undefined, ImageLayout.TransferDstOptimal);
+        //copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+        TransitionImageLayout(TestImage, Format.R8G8B8A8Unorm, ImageLayout.TransferDstOptimal, ImageLayout.ShaderReadOnlyOptimal);
+
+        TransitionImageLayout(ComputeImage, Format.R8G8B8A8Unorm, ImageLayout.Undefined, ImageLayout.TransferDstOptimal);
+        TransitionImageLayout(ComputeImage, Format.R8G8B8A8Unorm, ImageLayout.TransferDstOptimal, ImageLayout.General);
+    }
+
+    private void TransitionImageLayout(Image image, Format format, ImageLayout oldLayout, ImageLayout newLayout)
+    {
+        CommandBufferAllocateInfo allocInfo = new()
+        {
+            SType = StructureType.CommandBufferAllocateInfo,
+            Level = CommandBufferLevel.Primary,
+            CommandPool = CommandPool,
+            CommandBufferCount = 1,
+        };
+
+        CommandBuffer commandBuffer;
+        VkAPI.API.AllocateCommandBuffers(Device, &allocInfo, &commandBuffer);
+
+        CommandBufferBeginInfo beginInfo = new()
+        {
+            SType = StructureType.CommandBufferBeginInfo,
+            Flags = CommandBufferUsageFlags.OneTimeSubmitBit
+        };
+
+        VkAPI.API.BeginCommandBuffer(commandBuffer, &beginInfo);
+
+        ImageMemoryBarrier barrier = new()
+        {
+            SType = StructureType.ImageMemoryBarrier,
+            OldLayout = oldLayout,
+            NewLayout = newLayout,
+            SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            Image = image,
+            SubresourceRange = new()
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1,
+            }
+        };
+
+        PipelineStageFlags sourceStage;
+        PipelineStageFlags destinationStage;
+
+        if (oldLayout == ImageLayout.Undefined && newLayout == ImageLayout.TransferDstOptimal)
+        {
+            barrier.SrcAccessMask = 0;
+            barrier.DstAccessMask = AccessFlags.TransferWriteBit;
+
+            sourceStage = PipelineStageFlags.TopOfPipeBit;
+            destinationStage = PipelineStageFlags.TransferBit;
+        }
+        else if (oldLayout == ImageLayout.TransferDstOptimal && newLayout == ImageLayout.ShaderReadOnlyOptimal)
+        {
+            barrier.SrcAccessMask = AccessFlags.TransferWriteBit;
+            barrier.DstAccessMask = AccessFlags.ShaderReadBit;
+
+            sourceStage = PipelineStageFlags.TransferBit;
+            destinationStage = PipelineStageFlags.FragmentShaderBit;
+        }
+        else if (oldLayout == ImageLayout.TransferDstOptimal && newLayout == ImageLayout.General)
+        {
+            barrier.SrcAccessMask = AccessFlags.TransferWriteBit;
+            barrier.DstAccessMask = AccessFlags.ShaderWriteBit;
+
+            sourceStage = PipelineStageFlags.TransferBit;
+            destinationStage = PipelineStageFlags.ComputeShaderBit;
+        }
+        else
+        {
+            throw new ArgumentException("unsupported layout transition!");
+        }
+
+        VkAPI.API.CmdPipelineBarrier(
+            commandBuffer,
+            sourceStage, destinationStage,
+            0,
+            0, null,
+            0, null,
+            1, &barrier
+        );
+
+        VkAPI.API.EndCommandBuffer(commandBuffer);
+
+        SubmitInfo submitInfo = new()
+        {
+            SType = StructureType.SubmitInfo,
+            CommandBufferCount = 1,
+            PCommandBuffers = &commandBuffer,
+        };
+
+        VkAPI.API.QueueSubmit(GraphicsDevice.GraphicsQueue, 1, &submitInfo, new Fence());
+        VkAPI.API.QueueWaitIdle(GraphicsDevice.GraphicsQueue);
+
+        VkAPI.API.FreeCommandBuffers(Device, CommandPool, 1, &commandBuffer);
+    }
+
+    private void CreateComputePipeline()
+    {
+        DescriptorSetLayoutBinding imageLayoutBinding = new()
+        {
+            Binding = 1,
+            DescriptorCount = 1,
+            DescriptorType = DescriptorType.StorageImage,
+            PImmutableSamplers = null,
+            StageFlags = ShaderStageFlags.ComputeBit,
+        };
+
+        DescriptorSetLayoutBinding* bindings = stackalloc[] { imageLayoutBinding };
+        DescriptorSetLayoutCreateInfo layoutInfo = new()
+        {
+            SType = StructureType.DescriptorSetLayoutCreateInfo,
+            BindingCount = 1,
+            PBindings = bindings,
+        };
+
+        if (VkAPI.API.CreateDescriptorSetLayout(Device, &layoutInfo, null, out ComputeDescriptorSetLayout) != Result.Success)
+        {
+            throw new Exception("failed to create descriptor set layout!");
+        }
+
+
+        DescriptorSetAllocateInfo allocInfo = new()
+        {
+            SType = StructureType.DescriptorSetAllocateInfo,
+            DescriptorPool = DescriptorPool,
+            DescriptorSetCount = 1,
+        };
+
+        fixed (DescriptorSetLayout* ptr = &ComputeDescriptorSetLayout)
+        {
+            allocInfo.PSetLayouts = ptr;
+        }
+
+        Result ress = Result.Success;
+        fixed (DescriptorSet* ptr = &ComputeDescriptorSet)
+            if ((ress = VkAPI.API.AllocateDescriptorSets(Device, &allocInfo, ptr)) != Result.Success)
+            {
+                throw new Exception($"Failed to allocate descriptor sets {ress}");
+            }
+
+        DescriptorImageInfo imageInfo = new()
+        {
+            ImageLayout = ImageLayout.General,
+            ImageView = ComputeImageView
+        };
+
+        WriteDescriptorSet writeDescriptorSet = new()
+        {
+            SType = StructureType.WriteDescriptorSet,
+            DstSet = ComputeDescriptorSet,
+            DstBinding = 1,
+            DstArrayElement = 0,
+            DescriptorType = DescriptorType.StorageImage,
+            DescriptorCount = 1,
+            PImageInfo = &imageInfo,
+        };
+
+        VkAPI.API.UpdateDescriptorSets(Device, 1, &writeDescriptorSet, 0, null);
+
+        string path = Path.Combine(AppContext.BaseDirectory, "Assets", "Shaders", "Compiled");
+        byte[] computeShaderCode = File.ReadAllBytes(Path.Combine(path, "Ray", "Test.spirv"));
+
+        ShaderModule computeShaderModule = CreateShaderModule(computeShaderCode);
+
+        PipelineShaderStageCreateInfo computeShaderStageInfo = new()
+        {
+            SType = StructureType.PipelineShaderStageCreateInfo,
+            Stage = ShaderStageFlags.ComputeBit,
+            Module = computeShaderModule,
+            PName = (byte*)SilkMarshal.StringToPtr("CSMain")
+        };
+
+        DescriptorSetLayout* layouts = stackalloc[] { ComputeDescriptorSetLayout };
+        PipelineLayoutCreateInfo pipelineLayoutInfo = new()
+        {
+            SType = StructureType.PipelineLayoutCreateInfo,
+            SetLayoutCount = 1,
+            PSetLayouts = layouts,
+            PushConstantRangeCount = 0,
+        };
+
+        if (VkAPI.API.CreatePipelineLayout(Device, in pipelineLayoutInfo, null, out ComputePipelineLayout) != Result.Success)
+        {
+            throw new Exception("failed to create pipeline layout!");
+        }
+
+        ComputePipelineCreateInfo pipelineCreateInfo = new()
+        {
+            SType = StructureType.ComputePipelineCreateInfo,
+            Stage = computeShaderStageInfo,
+            Layout = ComputePipelineLayout,
+        };
+
+        fixed (Pipeline* ptr = &ComputePipeline)
+            if (VkAPI.API.CreateComputePipelines(Device, new PipelineCache(), 1, &pipelineCreateInfo, null, ptr) != Result.Success)
+            {
+                throw new Exception("Fuck");
+            }
+    }
+
+    private void CreateDescriptorSetLayout()
+    {
+        DescriptorSetLayoutBinding uboLayoutBinding = new()
+        {
+            Binding = 0,
+            DescriptorCount = 1,
+            DescriptorType = DescriptorType.UniformBuffer,
+            PImmutableSamplers = null,
+            StageFlags = ShaderStageFlags.FragmentBit,
+        };
+
+        DescriptorSetLayoutBinding samplerLayoutBinding = new()
+        {
+            Binding = 1,
+            DescriptorCount = 1,
+            DescriptorType = DescriptorType.CombinedImageSampler,
+            PImmutableSamplers = null,
+            StageFlags = ShaderStageFlags.FragmentBit,
+        };
+
+        DescriptorSetLayoutBinding* bindings = stackalloc[] { uboLayoutBinding, samplerLayoutBinding };
+        DescriptorSetLayoutCreateInfo layoutInfo = new()
+        {
+            SType = StructureType.DescriptorSetLayoutCreateInfo,
+            BindingCount = 2,
+            PBindings = bindings,
+        };
+
+        if (VkAPI.API.CreateDescriptorSetLayout(Device, &layoutInfo, null, out descriptorSetLayout) != Result.Success)
+        {
+            throw new Exception("failed to create descriptor set layout!");
+        }
+
+        DescriptorPoolSize poolSizes = new()
+        {
+            Type = DescriptorType.StorageImage,
+            DescriptorCount = (uint)Frames.Length + 1,
+        };
+
+        DescriptorPoolCreateInfo poolInfo = new()
+        {
+            SType = StructureType.DescriptorPoolCreateInfo,
+            PoolSizeCount = 1,
+            PPoolSizes = &poolSizes,
+            MaxSets = (uint)Frames.Length + 1,
+            Flags = DescriptorPoolCreateFlags.FreeDescriptorSetBit,
+        };
+
+        if (VkAPI.API.CreateDescriptorPool(Device, &poolInfo, null, out DescriptorPool) != Result.Success)
+        {
+            throw new Exception("Could not create descriptor pool");
+        }
+    }
+
+    private void CreateDescriptorSets()
+    {
+        DescriptorSetLayout* layouts = stackalloc DescriptorSetLayout[Frames.Length];
+        for (int i = 0; i < Frames.Length; i++)
+        {
+            layouts[i] = descriptorSetLayout;
+        }
+        DescriptorSetAllocateInfo allocInfo = new()
+        {
+            SType = StructureType.DescriptorSetAllocateInfo,
+            DescriptorPool = DescriptorPool,
+            DescriptorSetCount = (uint)Frames.Length,
+            PSetLayouts = layouts
+        };
+
+        DescriptorSet* sets = stackalloc DescriptorSet[Frames.Length];
+        if (VkAPI.API.AllocateDescriptorSets(Device, &allocInfo, sets) != Result.Success)
+        {
+            throw new Exception("Failed to allocate descriptor sets");
+        }
+
+        for (int i = 0; i < Frames.Length; i++)
+        {
+            DescriptorImageInfo imageInfo = new()
+            {
+                ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
+                ImageView = TestImageView,
+                Sampler = TestSampler,
+            };
+
+            WriteDescriptorSet writeDescriptorSet = new()
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = sets[i],
+                DstBinding = 1,
+                DstArrayElement = 0,
+                DescriptorType = DescriptorType.CombinedImageSampler,
+                DescriptorCount = 1,
+                PImageInfo = &imageInfo,
+            };
+
+            VkAPI.API.UpdateDescriptorSets(Device, 1, &writeDescriptorSet, 0, null);
+
+            Frames[i].DescriptorSet = sets[i];
+        }
     }
 
     private void CreateInstance()
@@ -286,6 +746,7 @@ public unsafe class Renderer : IDisposable
         CreateSwapChain();
         CreateImageViews();
         CreateRenderPass();
+        CreateDescriptorSets();
         CreateGraphicsPipeline();
         CreateFramebuffers();
         CreateCommandPool();
@@ -302,6 +763,7 @@ public unsafe class Renderer : IDisposable
             VkAPI.API.DestroyCommandPool(Device, frameData.CommandPool, null);
             VkAPI.API.DestroyImageView(Device, frameData.SwapChainImageView, null);
             VkAPI.API.DestroyFence(Device, frameData.Fence, null);
+            VkAPI.API.FreeDescriptorSets(Device, DescriptorPool, 1, &frameData.DescriptorSet);
         }
 
         VkAPI.API.DestroyPipeline(Device, graphicsPipeline, null);
@@ -538,10 +1000,12 @@ public unsafe class Renderer : IDisposable
         colorBlending.BlendConstants[2] = 0;
         colorBlending.BlendConstants[3] = 0;
 
+        DescriptorSetLayout* layouts = stackalloc[] { descriptorSetLayout };
         PipelineLayoutCreateInfo pipelineLayoutInfo = new()
         {
             SType = StructureType.PipelineLayoutCreateInfo,
-            SetLayoutCount = 0,
+            SetLayoutCount = 1,
+            PSetLayouts = layouts,
             PushConstantRangeCount = 0,
         };
 
@@ -678,7 +1142,6 @@ public unsafe class Renderer : IDisposable
                 throw new Exception("Failed to create Fence for frame");
             }
         }
-
     }
 
     private void DrawFrame(float delta)
@@ -748,14 +1211,23 @@ public unsafe class Renderer : IDisposable
 
         renderPassInfo.PClearValues = &clearColor;
 
-        VkAPI.API.CmdBeginRenderPass(frame.CommandBuffer, in renderPassInfo, SubpassContents.Inline);
+        // --- Compute ---
+        VkAPI.API.CmdBindDescriptorSets(frame.CommandBuffer, PipelineBindPoint.Compute, ComputePipelineLayout, 0, 1, ComputeDescriptorSet, 0, 0);
+
+        VkAPI.API.CmdBindPipeline(frame.CommandBuffer, PipelineBindPoint.Compute, ComputePipeline);
+        VkAPI.API.CmdDispatch(frame.CommandBuffer, 1, 1, 1);
 
         // --- Draw ---
         VkAPI.API.CmdBindPipeline(frame.CommandBuffer, PipelineBindPoint.Graphics, graphicsPipeline);
 
+        VkAPI.API.CmdBeginRenderPass(frame.CommandBuffer, in renderPassInfo, SubpassContents.Inline);
+
         Buffer* vertexBuffers = stackalloc[] { vertexBuffer };
         ulong* offsets = stackalloc ulong[] { 0 };
         VkAPI.API.CmdBindVertexBuffers(frame.CommandBuffer, 0, 1, vertexBuffers, offsets);
+
+        fixed (DescriptorSet* descriptorSetPtr = &frame.DescriptorSet)
+            VkAPI.API.CmdBindDescriptorSets(frame.CommandBuffer, PipelineBindPoint.Graphics, pipelineLayout, 0, 1, descriptorSetPtr, 0, null);
 
         VkAPI.API.CmdDraw(frame.CommandBuffer, (uint)vertices.Length, 1, 0, 0);
 
@@ -992,6 +1464,7 @@ public unsafe class Renderer : IDisposable
         public Image SwapChainImage;
         public ImageView SwapChainImageView;
         public Framebuffer Framebuffer;
+        public DescriptorSet DescriptorSet;
     }
 
     record struct FrameSemaphores
