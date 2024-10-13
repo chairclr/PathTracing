@@ -16,6 +16,7 @@
   <ItemGroup>
     <ShaderFiles Include="Basic/VertexShader" ShaderProfile="vs_6_0" ShaderEntryPoint="VSMain" />
     <ShaderFiles Include="Basic/PixelShader" ShaderProfile="ps_6_0" ShaderEntryPoint="PSMain" />
+    <ShaderFiles Include="Ray/Test" ShaderProfile="cs_6_0" ShaderEntryPoint="CSMain" />
   </ItemGroup>
 
   <Target Name="CompileShaders" BeforeTargets="BeforeBuild">

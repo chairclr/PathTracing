@@ -20,22 +20,18 @@ public unsafe class Renderer : IDisposable
 
     public readonly IWindow Window;
 
-    private Instance Instance;
+    public Instance Instance;
 
-    private KhrSurface? KhrSurface;
-    private SurfaceKHR Surface;
+    public KhrSurface? KhrSurface;
+    public SurfaceKHR Surface;
 
-    private PhysicalDevice PhysicalDevice;
-    private Device Device;
-
-    private Queue GraphicsQueue;
-    private Queue PresentQueue;
+    public GraphicsDevice GraphicsDevice;
+    private Device Device => GraphicsDevice.Device;
 
     private KhrSwapchain? KhrSwapChain;
     private SwapchainKHR SwapChain;
     private Format SwapChainImageFormat;
     private Extent2D SwapChainExtent;
-    private const int MAX_FRAMES_IN_FLIGHT = 2;
 
     private RenderPass renderPass;
     private PipelineLayout pipelineLayout;
@@ -49,7 +45,6 @@ public unsafe class Renderer : IDisposable
     private uint FrameIndex = 0;
     private uint SemaphoreIndex = 0;
 
-   
     private Vertex[] vertices = new Vertex[]
     {
         // First triangle
@@ -67,15 +62,15 @@ public unsafe class Renderer : IDisposable
     public Renderer(IWindow window)
     {
         Window = window;
+
+        GraphicsDevice = new GraphicsDevice(this);
     }
 
     public void Init()
     {
         CreateInstance();
-        SetupDebugMessenger();
         CreateSurface();
-        PickPhysicalDevice();
-        CreateLogicalDevice();
+        GraphicsDevice.Init();
         CreateSwapChain();
         CreateImageViews();
         CreateRenderPass();
@@ -86,6 +81,7 @@ public unsafe class Renderer : IDisposable
         CreateCommandBuffers();
         CreateSemaphores();
         CreateFences();
+        CreateResources();
     }
 
     public void Update(float deltaTime)
@@ -96,6 +92,33 @@ public unsafe class Renderer : IDisposable
     public void Render(float deltaTime)
     {
         DrawFrame(deltaTime);
+    }
+
+    private Image TestImage;
+
+    private void CreateResources()
+    {
+        ImageCreateInfo imageCreateInfo = new()
+        {
+            SType = StructureType.ImageCreateInfo,
+            Format = Format.R8G8B8A8Unorm,
+            Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit,
+            Extent = new Extent3D()
+            {
+                Width = (uint)Window.FramebufferSize.X,
+                Height = (uint)Window.FramebufferSize.Y,
+                Depth = 1
+            },
+            ImageType = ImageType.Type2D,
+            Samples = SampleCountFlags.Count1Bit,
+            MipLevels = 1,
+            ArrayLayers = 1,
+            InitialLayout = ImageLayout.Undefined,
+            Tiling = ImageTiling.Optimal,
+            SharingMode = SharingMode.Exclusive
+        };
+
+        VkAPI.API.CreateImage(Device, in imageCreateInfo, null, out TestImage);
     }
 
     private void CreateInstance()
@@ -132,14 +155,7 @@ public unsafe class Renderer : IDisposable
         createInfo.PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(VkAPI.ValidationLayers);
 
         DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new();
-        debugCreateInfo.SType = StructureType.DebugUtilsMessengerCreateInfoExt;
-        debugCreateInfo.MessageSeverity = DebugUtilsMessageSeverityFlagsEXT.VerboseBitExt |
-                                     DebugUtilsMessageSeverityFlagsEXT.WarningBitExt |
-                                     DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt;
-        debugCreateInfo.MessageType = DebugUtilsMessageTypeFlagsEXT.GeneralBitExt |
-                                 DebugUtilsMessageTypeFlagsEXT.PerformanceBitExt |
-                                 DebugUtilsMessageTypeFlagsEXT.ValidationBitExt;
-        debugCreateInfo.PfnUserCallback = (DebugUtilsMessengerCallbackFunctionEXT)DebugCallback;
+        GraphicsDevice.PopulateDebugUtilsMessengerCreateInfo(ref debugCreateInfo);
         createInfo.PNext = &debugCreateInfo;
 #else
         createInfo.EnabledLayerCount = 0;
@@ -170,85 +186,9 @@ public unsafe class Renderer : IDisposable
         Surface = Window.VkSurface!.Create<AllocationCallbacks>(Instance.ToHandle(), null).ToSurface();
     }
 
-    private void PickPhysicalDevice()
-    {
-        foreach (PhysicalDevice device in VkAPI.API.GetPhysicalDevices(Instance))
-        {
-            if (IsDeviceSuitable(device))
-            {
-                PhysicalDevice = device;
-                break;
-            }
-        }
-
-        if (PhysicalDevice.Handle == 0)
-        {
-            throw new Exception("No physical device available");
-        }
-    }
-
-    private void CreateLogicalDevice()
-    {
-        QueueFamilyIndices indices = FindQueueFamilies(PhysicalDevice);
-
-        uint[] uniqueQueueFamilies = new uint[] { indices.GraphicsFamily!.Value, indices.PresentFamily!.Value };
-        uniqueQueueFamilies = uniqueQueueFamilies.Distinct().ToArray();
-
-        using GlobalMemory mem = GlobalMemory.Allocate(uniqueQueueFamilies.Length * sizeof(DeviceQueueCreateInfo));
-        DeviceQueueCreateInfo* queueCreateInfos = (DeviceQueueCreateInfo*)Unsafe.AsPointer(ref mem.GetPinnableReference());
-
-        float queuePriority = 1.0f;
-        for (int i = 0; i < uniqueQueueFamilies.Length; i++)
-        {
-            queueCreateInfos[i] = new()
-            {
-                SType = StructureType.DeviceQueueCreateInfo,
-                QueueFamilyIndex = uniqueQueueFamilies[i],
-                QueueCount = 1,
-                PQueuePriorities = &queuePriority
-            };
-        }
-
-        PhysicalDeviceFeatures deviceFeatures = new();
-
-        DeviceCreateInfo createInfo = new()
-        {
-            SType = StructureType.DeviceCreateInfo,
-            QueueCreateInfoCount = (uint)uniqueQueueFamilies.Length,
-            PQueueCreateInfos = queueCreateInfos,
-
-            PEnabledFeatures = &deviceFeatures,
-
-            EnabledExtensionCount = (uint)VkAPI.DeviceExtensions.Length,
-            PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(VkAPI.DeviceExtensions)
-        };
-
-#if DEBUG
-        createInfo.EnabledLayerCount = (uint)VkAPI.ValidationLayers.Length;
-        createInfo.PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(VkAPI.ValidationLayers);
-#else
-        createInfo.EnabledLayerCount = 0;
-#endif
-
-        if (VkAPI.API.CreateDevice(PhysicalDevice, in createInfo, null, out Device) != Result.Success)
-        {
-            throw new Exception("failed to create logical Device!");
-        }
-
-        VkAPI.API.GetDeviceQueue(Device, indices.GraphicsFamily!.Value, 0, out GraphicsQueue);
-        VkAPI.API.GetDeviceQueue(Device, indices.PresentFamily!.Value, 0, out PresentQueue);
-
-#if DEBUG
-        SilkMarshal.Free((nint)createInfo.PpEnabledLayerNames);
-#endif
-
-        SilkMarshal.Free((nint)createInfo.PpEnabledExtensionNames);
-
-    }
-
     private void CreateSwapChain()
     {
-        SwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(PhysicalDevice);
+        GraphicsDevice.SwapChainSupportDetails swapChainSupport = GraphicsDevice.QuerySwapChainSupport(GraphicsDevice.PhysicalDevice);
 
         SurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(swapChainSupport.Formats);
         PresentModeKHR presentMode = ChoosePresentMode(swapChainSupport.PresentModes);
@@ -273,10 +213,10 @@ public unsafe class Renderer : IDisposable
             ImageUsage = ImageUsageFlags.ColorAttachmentBit,
         };
 
-        QueueFamilyIndices indices = FindQueueFamilies(PhysicalDevice);
-        uint* queueFamilyIndices = stackalloc uint[] { indices.GraphicsFamily!.Value, indices.PresentFamily!.Value };
+        GraphicsDevice.QueueFamilyIndices indices = GraphicsDevice.FindQueueFamilies(GraphicsDevice.PhysicalDevice);
+        uint* queueFamilyIndices = stackalloc uint[] { indices.GraphicsAndComputeFamily!.Value, indices.PresentFamily!.Value };
 
-        if (indices.GraphicsFamily != indices.PresentFamily)
+        if (indices.GraphicsAndComputeFamily != indices.PresentFamily)
         {
             createInfo = createInfo with
             {
@@ -665,12 +605,12 @@ public unsafe class Renderer : IDisposable
 
     private void CreateCommandPool()
     {
-        QueueFamilyIndices queueFamiliyIndicies = FindQueueFamilies(PhysicalDevice);
+        GraphicsDevice.QueueFamilyIndices queueFamiliyIndicies = GraphicsDevice.FindQueueFamilies(GraphicsDevice.PhysicalDevice);
 
         CommandPoolCreateInfo poolInfo = new()
         {
             SType = StructureType.CommandPoolCreateInfo,
-            QueueFamilyIndex = queueFamiliyIndicies.GraphicsFamily!.Value,
+            QueueFamilyIndex = queueFamiliyIndicies.GraphicsAndComputeFamily!.Value,
         };
 
         for (int i = 0; i < Frames.Length; i++)
@@ -780,7 +720,7 @@ public unsafe class Renderer : IDisposable
 
         // --- Begin ---
         VkAPI.API.ResetCommandPool(Device, frame.CommandPool, CommandPoolResetFlags.None);
-        
+
         CommandBufferBeginInfo commandBufferBeginInfo = new()
         {
             SType = StructureType.CommandBufferBeginInfo,
@@ -854,7 +794,7 @@ public unsafe class Renderer : IDisposable
             PSignalSemaphores = signalSemaphores,
         };
 
-        if (VkAPI.API.QueueSubmit(GraphicsQueue, 1, submitInfo, frame.Fence) != Result.Success)
+        if (VkAPI.API.QueueSubmit(GraphicsDevice.GraphicsQueue, 1, submitInfo, frame.Fence) != Result.Success)
         {
             throw new Exception("Failed to submit draw command buffer");
         }
@@ -874,7 +814,7 @@ public unsafe class Renderer : IDisposable
             PImageIndices = &frameIndex
         };
 
-        result = KhrSwapChain.QueuePresent(PresentQueue, presentInfo);
+        result = KhrSwapChain.QueuePresent(GraphicsDevice.PresentQueue, presentInfo);
 
         if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr)
         {
@@ -914,7 +854,7 @@ public unsafe class Renderer : IDisposable
         {
             SType = StructureType.MemoryAllocateInfo,
             AllocationSize = memRequirements.Size,
-            MemoryTypeIndex = FindMemoryType(memRequirements.MemoryTypeBits, MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit),
+            MemoryTypeIndex = GraphicsDevice.FindMemoryType(memRequirements.MemoryTypeBits, MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit),
         };
 
         fixed (DeviceMemory* vertexBufferMemoryPtr = &vertexBufferMemory)
@@ -931,21 +871,6 @@ public unsafe class Renderer : IDisposable
         VkAPI.API.MapMemory(Device, vertexBufferMemory, 0, bufferInfo.Size, 0, &data);
         vertices.AsSpan().CopyTo(new Span<Vertex>(data, vertices.Length));
         VkAPI.API.UnmapMemory(Device, vertexBufferMemory);
-    }
-
-    private uint FindMemoryType(uint typeFilter, MemoryPropertyFlags properties)
-    {
-        VkAPI.API.GetPhysicalDeviceMemoryProperties(PhysicalDevice, out PhysicalDeviceMemoryProperties memProperties);
-
-        for (int i = 0; i < memProperties.MemoryTypeCount; i++)
-        {
-            if ((typeFilter & (1 << i)) != 0 && (memProperties.MemoryTypes[i].PropertyFlags & properties) == properties)
-            {
-                return (uint)i;
-            }
-        }
-
-        throw new Exception("failed to find suitable memory type!");
     }
 
     private ShaderModule CreateShaderModule(byte[] code)
@@ -1021,120 +946,6 @@ public unsafe class Renderer : IDisposable
         }
     }
 
-    private SwapChainSupportDetails QuerySwapChainSupport(PhysicalDevice PhysicalDevice)
-    {
-        SwapChainSupportDetails details = new();
-
-        KhrSurface!.GetPhysicalDeviceSurfaceCapabilities(PhysicalDevice, Surface, out details.Capabilities);
-
-        uint formatCount = 0;
-        KhrSurface.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, null);
-
-        if (formatCount != 0)
-        {
-            details.Formats = new SurfaceFormatKHR[formatCount];
-            fixed (SurfaceFormatKHR* formatsPtr = details.Formats)
-            {
-                KhrSurface.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, formatsPtr);
-            }
-        }
-        else
-        {
-            details.Formats = Array.Empty<SurfaceFormatKHR>();
-        }
-
-        uint presentModeCount = 0;
-        KhrSurface.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, null);
-
-        if (presentModeCount != 0)
-        {
-            details.PresentModes = new PresentModeKHR[presentModeCount];
-            fixed (PresentModeKHR* formatsPtr = details.PresentModes)
-            {
-                KhrSurface.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, formatsPtr);
-            }
-
-        }
-        else
-        {
-            details.PresentModes = Array.Empty<PresentModeKHR>();
-        }
-
-        return details;
-    }
-
-    private bool IsDeviceSuitable(PhysicalDevice device)
-    {
-        QueueFamilyIndices indices = FindQueueFamilies(device);
-
-        bool extensionsSupported = CheckDeviceExtensionsSupport(device);
-
-        bool swapChainAdequate = false;
-        if (extensionsSupported)
-        {
-            SwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(device);
-            swapChainAdequate = swapChainSupport.Formats.Any() && swapChainSupport.PresentModes.Any();
-        }
-
-        return indices.IsComplete() && extensionsSupported && swapChainAdequate;
-    }
-
-    private bool CheckDeviceExtensionsSupport(PhysicalDevice device)
-    {
-        uint extentionsCount = 0;
-        VkAPI.API.EnumerateDeviceExtensionProperties(device, (byte*)null, ref extentionsCount, null);
-
-        ExtensionProperties[] availableExtensions = new ExtensionProperties[extentionsCount];
-        fixed (ExtensionProperties* availableExtensionsPtr = availableExtensions)
-        {
-            VkAPI.API.EnumerateDeviceExtensionProperties(device, (byte*)null, ref extentionsCount, availableExtensionsPtr);
-        }
-
-        HashSet<string?> availableExtensionNames = availableExtensions.Select(extension => Marshal.PtrToStringAnsi((IntPtr)extension.ExtensionName)).ToHashSet();
-
-        return VkAPI.DeviceExtensions.All(availableExtensionNames.Contains);
-
-    }
-
-    private QueueFamilyIndices FindQueueFamilies(PhysicalDevice device)
-    {
-        QueueFamilyIndices indices = new();
-
-        uint queueFamilityCount = 0;
-        VkAPI.API.GetPhysicalDeviceQueueFamilyProperties(device, ref queueFamilityCount, null);
-
-        QueueFamilyProperties[] queueFamilies = new QueueFamilyProperties[queueFamilityCount];
-        fixed (QueueFamilyProperties* queueFamiliesPtr = queueFamilies)
-        {
-            VkAPI.API.GetPhysicalDeviceQueueFamilyProperties(device, ref queueFamilityCount, queueFamiliesPtr);
-        }
-
-        uint i = 0;
-        foreach (QueueFamilyProperties queueFamily in queueFamilies)
-        {
-            if (queueFamily.QueueFlags.HasFlag(QueueFlags.GraphicsBit))
-            {
-                indices.GraphicsFamily = i;
-            }
-
-            KhrSurface!.GetPhysicalDeviceSurfaceSupport(device, i, Surface, out Bool32 presentSupport);
-
-            if (presentSupport)
-            {
-                indices.PresentFamily = i;
-            }
-
-            if (indices.IsComplete())
-            {
-                break;
-            }
-
-            i++;
-        }
-
-        return indices;
-    }
-
     private string[] GetRequiredExtensions()
     {
         byte** glfwExtensions = Window.VkSurface!.GetRequiredExtensions(out uint glfwExtensionCount);
@@ -1147,71 +958,6 @@ public unsafe class Renderer : IDisposable
 #endif
     }
 
-    private ExtDebugUtils? DebugUtils;
-    private DebugUtilsMessengerEXT DebugMessenger;
-
-    private void SetupDebugMessenger()
-    {
-#if DEBUG
-        if (!VkAPI.API.TryGetInstanceExtension(Instance, out DebugUtils)) return;
-
-        DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new();
-        debugCreateInfo.SType = StructureType.DebugUtilsMessengerCreateInfoExt;
-        debugCreateInfo.MessageSeverity = DebugUtilsMessageSeverityFlagsEXT.VerboseBitExt |
-                                     DebugUtilsMessageSeverityFlagsEXT.WarningBitExt |
-                                     DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt;
-        debugCreateInfo.MessageType = DebugUtilsMessageTypeFlagsEXT.GeneralBitExt |
-                                 DebugUtilsMessageTypeFlagsEXT.PerformanceBitExt |
-                                 DebugUtilsMessageTypeFlagsEXT.ValidationBitExt;
-        debugCreateInfo.PfnUserCallback = (DebugUtilsMessengerCallbackFunctionEXT)DebugCallback;
-
-        if (DebugUtils!.CreateDebugUtilsMessenger(Instance, in debugCreateInfo, null, out DebugMessenger) != Result.Success)
-        {
-            throw new Exception("Failed to create DebugMessenger");
-        }
-#endif
-    }
-
-    private uint DebugCallback(DebugUtilsMessageSeverityFlagsEXT messageSeverity, DebugUtilsMessageTypeFlagsEXT messageTypes, DebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
-    {
-        string? message = Marshal.PtrToStringAnsi((nint)pCallbackData->PMessage);
-
-        if ((messageSeverity & DebugUtilsMessageSeverityFlagsEXT.InfoBitExt) != 0 || (messageSeverity & DebugUtilsMessageSeverityFlagsEXT.VerboseBitExt) != 0)
-        {
-            Logger.LogInformation(message);
-        }
-
-        if ((messageSeverity & DebugUtilsMessageSeverityFlagsEXT.WarningBitExt) != 0)
-        {
-            Logger.LogWarning(message);
-        }
-
-        if ((messageSeverity & DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt) != 0)
-        {
-            Logger.LogCritical(message);
-        }
-
-        return Vk.False;
-    }
-
-    struct QueueFamilyIndices
-    {
-        public uint? GraphicsFamily { get; set; }
-        public uint? PresentFamily { get; set; }
-
-        public bool IsComplete()
-        {
-            return GraphicsFamily.HasValue && PresentFamily.HasValue;
-        }
-    }
-
-    struct SwapChainSupportDetails
-    {
-        public SurfaceCapabilitiesKHR Capabilities;
-        public SurfaceFormatKHR[] Formats;
-        public PresentModeKHR[] PresentModes;
-    }
-
     protected virtual void Dispose(bool disposing)
     {
         if (!_disposed)
@@ -1219,7 +965,7 @@ public unsafe class Renderer : IDisposable
             VkAPI.API.DeviceWaitIdle(Device);
 
             CleanUpSwapChain();
-            
+
             foreach (FrameSemaphores semaphores in Semaphores)
             {
                 VkAPI.API.DestroySemaphore(Device, semaphores.ImageAcquiredSemaphore, null);
@@ -1229,11 +975,8 @@ public unsafe class Renderer : IDisposable
             VkAPI.API.DestroyBuffer(Device, vertexBuffer, null);
             VkAPI.API.FreeMemory(Device, vertexBufferMemory, null);
 
-            VkAPI.API.DestroyDevice(Device, null);
+            GraphicsDevice.Dispose();
 
-#if DEBUG
-            DebugUtils?.DestroyDebugUtilsMessenger(Instance, DebugMessenger, null);
-#endif
             KhrSurface?.DestroySurface(Instance, Surface, null);
             VkAPI.API.DestroyInstance(Instance, null);
 
