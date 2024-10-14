@@ -12,8 +12,9 @@ public unsafe class GraphicsDevice : IDisposable
 {
     private bool _disposed;
 
-    private Renderer Renderer;
+    public Renderer Renderer;
 
+    public Instance Instance;
     public PhysicalDevice PhysicalDevice;
     public Device Device;
 
@@ -21,9 +22,13 @@ public unsafe class GraphicsDevice : IDisposable
     public Queue PresentQueue;
     public Queue ComputeQueue;
 
+    public ResourceFactory ResourceFactory { get; private set; }
+
     public GraphicsDevice(Renderer renderer)
     {
         Renderer = renderer;
+
+        ResourceFactory = new ResourceFactory(this);
     }
 
     public void Init()
@@ -48,9 +53,65 @@ public unsafe class GraphicsDevice : IDisposable
         throw new Exception("failed to find suitable memory type!");
     }
 
+    private void CreateInstance()
+    {
+        #if DEBUG
+        if (!VkAPI.CheckValidationLayerSupport())
+        {
+            throw new Exception("Validation layers requested but not supported");
+        }
+#endif
+
+        ApplicationInfo appInfo = new()
+        {
+            SType = StructureType.ApplicationInfo,
+            PApplicationName = (byte*)Marshal.StringToHGlobalAnsi("Hello Triangle"),
+            ApplicationVersion = new Version32(1, 0, 0),
+            PEngineName = (byte*)Marshal.StringToHGlobalAnsi("No Engine"),
+            EngineVersion = new Version32(1, 0, 0),
+            ApiVersion = Vk.Version12
+        };
+
+        InstanceCreateInfo createInfo = new()
+        {
+            SType = StructureType.InstanceCreateInfo,
+            PApplicationInfo = &appInfo
+        };
+
+        string[] extensions = GetRequiredExtensions();
+        createInfo.EnabledExtensionCount = (uint)extensions.Length;
+        createInfo.PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(extensions);
+
+#if DEBUG
+        createInfo.EnabledLayerCount = (uint)VkAPI.ValidationLayers.Length;
+        createInfo.PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(VkAPI.ValidationLayers);
+
+        DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new();
+        PopulateDebugUtilsMessengerCreateInfo(ref debugCreateInfo);
+        createInfo.PNext = &debugCreateInfo;
+#else
+        createInfo.EnabledLayerCount = 0;
+        createInfo.PNext = null;
+#endif
+
+        if (VkAPI.API.CreateInstance(in createInfo, null, out Instance) != Result.Success)
+        {
+            throw new Exception("Failed to create Vulkan Instance");
+        }
+
+        Marshal.FreeHGlobal((nint)appInfo.PApplicationName);
+        Marshal.FreeHGlobal((nint)appInfo.PEngineName);
+        SilkMarshal.Free((nint)createInfo.PpEnabledExtensionNames);
+
+#if DEBUG
+        SilkMarshal.Free((nint)createInfo.PpEnabledLayerNames);
+#endif
+    }
+
+
     private void PickPhysicalDevice()
     {
-        foreach (PhysicalDevice device in VkAPI.API.GetPhysicalDevices(Renderer.Instance))
+        foreach (PhysicalDevice device in VkAPI.API.GetPhysicalDevices(Instance))
         {
             if (IsDeviceSuitable(device))
             {
@@ -244,18 +305,30 @@ public unsafe class GraphicsDevice : IDisposable
         return details;
     }
 
+    private string[] GetRequiredExtensions()
+    {
+        byte** glfwExtensions = Renderer.Window.VkSurface!.GetRequiredExtensions(out uint glfwExtensionCount);
+        string[] extensions = SilkMarshal.PtrToStringArray((nint)glfwExtensions, (int)glfwExtensionCount);
+
+#if DEBUG
+        return [.. extensions, ExtDebugUtils.ExtensionName];
+#else
+        return extensions;
+#endif
+    }
+
     private ExtDebugUtils? DebugUtils;
     private DebugUtilsMessengerEXT DebugMessenger;
 
     private void SetupDebugMessenger()
     {
 #if DEBUG
-        if (!VkAPI.API.TryGetInstanceExtension(Renderer.Instance, out DebugUtils)) return;
+        if (!VkAPI.API.TryGetInstanceExtension(Instance, out DebugUtils)) return;
 
         DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new();
         PopulateDebugUtilsMessengerCreateInfo(ref debugCreateInfo);
         
-        if (DebugUtils!.CreateDebugUtilsMessenger(Renderer.Instance, in debugCreateInfo, null, out DebugMessenger) != Result.Success)
+        if (DebugUtils!.CreateDebugUtilsMessenger(Instance, in debugCreateInfo, null, out DebugMessenger) != Result.Success)
         {
             throw new Exception("Failed to create DebugMessenger");
         }
@@ -322,7 +395,7 @@ public unsafe class GraphicsDevice : IDisposable
             VkAPI.API.DestroyDevice(Device, null);
 
 #if DEBUG
-            DebugUtils?.DestroyDebugUtilsMessenger(Renderer.Instance, DebugMessenger, null);
+            DebugUtils?.DestroyDebugUtilsMessenger(Instance, DebugMessenger, null);
 #endif
 
             _disposed = true;

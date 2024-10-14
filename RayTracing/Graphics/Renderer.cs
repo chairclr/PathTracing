@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -20,18 +21,13 @@ public unsafe class Renderer : IDisposable
 
     public readonly IWindow Window;
 
-    public Instance Instance;
+    public SwapChain? SwapChain;
 
     public KhrSurface? KhrSurface;
     public SurfaceKHR Surface;
 
     public GraphicsDevice GraphicsDevice;
     private Device Device => GraphicsDevice.Device;
-
-    private KhrSwapchain? KhrSwapChain;
-    private SwapchainKHR SwapChain;
-    private Format SwapChainImageFormat;
-    private Extent2D SwapChainExtent;
 
     private RenderPass renderPass;
     private PipelineLayout pipelineLayout;
@@ -74,9 +70,8 @@ public unsafe class Renderer : IDisposable
 
     public void Init()
     {
-        CreateInstance();
-        CreateSurface();
         GraphicsDevice.Init();
+        CreateSurface();
         CreateSwapChain();
         CreateImageViews();
         CreateRenderPass();
@@ -106,7 +101,7 @@ public unsafe class Renderer : IDisposable
 
     private Sampler TestSampler;
 
-    private DescriptorSetLayout descriptorSetLayout;
+    private DescriptorSetLayout DescriptorSetLayout;
     private DescriptorPool DescriptorPool;
 
     private DescriptorSetLayout ComputeDescriptorSetLayout;
@@ -433,7 +428,7 @@ public unsafe class Renderer : IDisposable
             PBindings = bindings,
         };
 
-        if (VkAPI.API.CreateDescriptorSetLayout(Device, &layoutInfo, null, out descriptorSetLayout) != Result.Success)
+        if (VkAPI.API.CreateDescriptorSetLayout(Device, &layoutInfo, null, out DescriptorSetLayout) != Result.Success)
         {
             throw new Exception("failed to create descriptor set layout!");
         }
@@ -464,7 +459,7 @@ public unsafe class Renderer : IDisposable
         DescriptorSetLayout* layouts = stackalloc DescriptorSetLayout[Frames.Length];
         for (int i = 0; i < Frames.Length; i++)
         {
-            layouts[i] = descriptorSetLayout;
+            layouts[i] = DescriptorSetLayout;
         }
         DescriptorSetAllocateInfo allocInfo = new()
         {
@@ -506,152 +501,19 @@ public unsafe class Renderer : IDisposable
         }
     }
 
-    private void CreateInstance()
-    {
-#if DEBUG
-        if (!VkAPI.CheckValidationLayerSupport())
-        {
-            throw new Exception("Validation layers requested but not supported");
-        }
-#endif
-
-        ApplicationInfo appInfo = new()
-        {
-            SType = StructureType.ApplicationInfo,
-            PApplicationName = (byte*)Marshal.StringToHGlobalAnsi("Hello Triangle"),
-            ApplicationVersion = new Version32(1, 0, 0),
-            PEngineName = (byte*)Marshal.StringToHGlobalAnsi("No Engine"),
-            EngineVersion = new Version32(1, 0, 0),
-            ApiVersion = Vk.Version12
-        };
-
-        InstanceCreateInfo createInfo = new()
-        {
-            SType = StructureType.InstanceCreateInfo,
-            PApplicationInfo = &appInfo
-        };
-
-        string[] extensions = GetRequiredExtensions();
-        createInfo.EnabledExtensionCount = (uint)extensions.Length;
-        createInfo.PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(extensions);
-
-#if DEBUG
-        createInfo.EnabledLayerCount = (uint)VkAPI.ValidationLayers.Length;
-        createInfo.PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(VkAPI.ValidationLayers);
-
-        DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new();
-        GraphicsDevice.PopulateDebugUtilsMessengerCreateInfo(ref debugCreateInfo);
-        createInfo.PNext = &debugCreateInfo;
-#else
-        createInfo.EnabledLayerCount = 0;
-        createInfo.PNext = null;
-#endif
-
-        if (VkAPI.API.CreateInstance(in createInfo, null, out Instance) != Result.Success)
-        {
-            throw new Exception("Failed to create Vulkan Instance");
-        }
-
-        Marshal.FreeHGlobal((nint)appInfo.PApplicationName);
-        Marshal.FreeHGlobal((nint)appInfo.PEngineName);
-        SilkMarshal.Free((nint)createInfo.PpEnabledExtensionNames);
-
-#if DEBUG
-        SilkMarshal.Free((nint)createInfo.PpEnabledLayerNames);
-#endif
-    }
-
     private void CreateSurface()
     {
-        if (!VkAPI.API.TryGetInstanceExtension<KhrSurface>(Instance, out KhrSurface))
+        if (!VkAPI.API.TryGetInstanceExtension<KhrSurface>(GraphicsDevice.Instance, out KhrSurface))
         {
             throw new NotSupportedException("KHR_surface extension not found");
         }
 
-        Surface = Window.VkSurface!.Create<AllocationCallbacks>(Instance.ToHandle(), null).ToSurface();
+        Surface = Window.VkSurface!.Create<AllocationCallbacks>(GraphicsDevice.Instance.ToHandle(), null).ToSurface();
     }
 
     private void CreateSwapChain()
     {
-        GraphicsDevice.SwapChainSupportDetails swapChainSupport = GraphicsDevice.QuerySwapChainSupport(GraphicsDevice.PhysicalDevice);
-
-        SurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(swapChainSupport.Formats);
-        PresentModeKHR presentMode = ChoosePresentMode(swapChainSupport.PresentModes);
-        Extent2D extent = ChooseSwapExtent(swapChainSupport.Capabilities);
-
-        uint imageCount = swapChainSupport.Capabilities.MinImageCount + 1;
-        if (swapChainSupport.Capabilities.MaxImageCount > 0 && imageCount > swapChainSupport.Capabilities.MaxImageCount)
-        {
-            imageCount = swapChainSupport.Capabilities.MaxImageCount;
-        }
-
-        SwapchainCreateInfoKHR createInfo = new()
-        {
-            SType = StructureType.SwapchainCreateInfoKhr,
-            Surface = Surface,
-
-            MinImageCount = imageCount,
-            ImageFormat = surfaceFormat.Format,
-            ImageColorSpace = surfaceFormat.ColorSpace,
-            ImageExtent = extent,
-            ImageArrayLayers = 1,
-            ImageUsage = ImageUsageFlags.ColorAttachmentBit,
-        };
-
-        GraphicsDevice.QueueFamilyIndices indices = GraphicsDevice.FindQueueFamilies(GraphicsDevice.PhysicalDevice);
-        uint* queueFamilyIndices = stackalloc uint[] { indices.GraphicsAndComputeFamily!.Value, indices.PresentFamily!.Value };
-
-        if (indices.GraphicsAndComputeFamily != indices.PresentFamily)
-        {
-            createInfo = createInfo with
-            {
-                ImageSharingMode = SharingMode.Concurrent,
-                QueueFamilyIndexCount = 2,
-                PQueueFamilyIndices = queueFamilyIndices,
-            };
-        }
-        else
-        {
-            createInfo.ImageSharingMode = SharingMode.Exclusive;
-        }
-
-        createInfo = createInfo with
-        {
-            PreTransform = swapChainSupport.Capabilities.CurrentTransform,
-            CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
-            PresentMode = presentMode,
-            Clipped = true,
-
-            OldSwapchain = default
-        };
-
-        if (!VkAPI.API.TryGetDeviceExtension(Instance, Device, out KhrSwapChain))
-        {
-            throw new NotSupportedException("VK_KHR_swapchain extension not found");
-        }
-
-        if (KhrSwapChain!.CreateSwapchain(Device, in createInfo, null, out SwapChain) != Result.Success)
-        {
-            throw new Exception("Failed to create SwapChain");
-        }
-
-        KhrSwapChain.GetSwapchainImages(Device, SwapChain, ref imageCount, null);
-
-        Frames = new FrameData[imageCount];
-
-        Image[] swapChainImages = new Image[Frames.Length];
-        fixed (Image* swapChainImagesPtr = swapChainImages)
-        {
-            KhrSwapChain.GetSwapchainImages(Device, SwapChain, ref imageCount, swapChainImagesPtr);
-        }
-
-        for (int i = 0; i < Frames.Length; i++)
-        {
-            Frames[i].SwapChainImage = swapChainImages[i];
-        }
-
-        SwapChainImageFormat = surfaceFormat.Format;
-        SwapChainExtent = extent;
+        SwapChain = GraphicsDevice.ResourceFactory.CreateSwapChain(Surface);
     }
 
     private void RecreateSwapChain()
@@ -925,7 +787,7 @@ public unsafe class Renderer : IDisposable
         colorBlending.BlendConstants[2] = 0;
         colorBlending.BlendConstants[3] = 0;
 
-        DescriptorSetLayout* layouts = stackalloc[] { descriptorSetLayout };
+        DescriptorSetLayout* layouts = stackalloc[] { DescriptorSetLayout };
         PipelineLayoutCreateInfo pipelineLayoutInfo = new()
         {
             SType = StructureType.PipelineLayoutCreateInfo,
@@ -1094,56 +956,6 @@ public unsafe class Renderer : IDisposable
 
     public void Render(float delta)
     {
-        VkAPI.API.ResetFences(Device, 1, ComputeFence);
-        ComputeFrame(delta);
-        VkAPI.API.WaitForFences(Device, 1, ComputeFence, true, ulong.MaxValue);
-
-        DrawFrame(delta);
-    }
-
-    private void ComputeFrame(float delta)
-    {
-        VkAPI.API.ResetCommandPool(Device, ComputeCommandPool, CommandPoolResetFlags.None);
-
-        CommandBufferBeginInfo commandBufferBeginInfo = new()
-        {
-            SType = StructureType.CommandBufferBeginInfo,
-            Flags = CommandBufferUsageFlags.OneTimeSubmitBit
-        };
-        VkAPI.API.BeginCommandBuffer(ComputeCommandBuffer, in commandBufferBeginInfo);
-
-        VkAPI.API.CmdBindDescriptorSets(ComputeCommandBuffer, PipelineBindPoint.Compute, ComputePipelineLayout, 0, 1, ComputeDescriptorSet, 0, 0);
-
-        VkAPI.API.CmdBindPipeline(ComputeCommandBuffer, PipelineBindPoint.Compute, ComputePipeline);
-        VkAPI.API.CmdDispatch(ComputeCommandBuffer, (uint)MathF.Ceiling(1920f / 32f), (uint)MathF.Ceiling(1080f / 32f), 1);
-
-        if (VkAPI.API.EndCommandBuffer(ComputeCommandBuffer) != Result.Success)
-        {
-            throw new Exception("failed to record command buffer!");
-        }
-        SubmitInfo submitInfo = new()
-        {
-            SType = StructureType.SubmitInfo,
-        };
-
-        CommandBuffer buffer = ComputeCommandBuffer;
-
-        submitInfo = submitInfo with
-        {
-            WaitSemaphoreCount = 0,
-            CommandBufferCount = 1,
-            PCommandBuffers = &buffer,
-        };
-
-        if (VkAPI.API.QueueSubmit(GraphicsDevice.ComputeQueue, 1, submitInfo, ComputeFence) != Result.Success)
-        {
-            throw new Exception("Failed to submit draw command buffer");
-        }
-    }
-
-    private void DrawFrame(float delta)
-    {
-        Logger.LogInformation($"Guh: {1 / delta}");
         FrameSemaphores frameSemaphores = Semaphores[SemaphoreIndex];
         Result result = KhrSwapChain!.AcquireNextImage(Device, SwapChain, ulong.MaxValue, frameSemaphores.ImageAcquiredSemaphore, default, ref FrameIndex);
 
@@ -1176,9 +988,87 @@ public unsafe class Renderer : IDisposable
                 throw new Exception("Failed to create Fence for frame");
             }
         }
-
         VkAPI.API.ResetFences(Device, 1, frame.Fence);
 
+
+        VkAPI.API.ResetFences(Device, 1, ComputeFence);
+        ComputeFrame(delta);
+        VkAPI.API.WaitForFences(Device, 1, ComputeFence, true, ulong.MaxValue);
+
+        DrawFrame(delta);
+
+        uint frameIndex = FrameIndex;
+        SwapchainKHR* swapChains = stackalloc[] { SwapChain };
+        PresentInfoKHR presentInfo = new()
+        {
+            SType = StructureType.PresentInfoKhr,
+
+            WaitSemaphoreCount = 1,
+            PWaitSemaphores = &frameSemaphores.RenderCompleteSemaphore,
+
+            SwapchainCount = 1,
+            PSwapchains = swapChains,
+
+            PImageIndices = &frameIndex
+        };
+
+        result = KhrSwapChain.QueuePresent(GraphicsDevice.PresentQueue, presentInfo);
+
+        if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr)
+        {
+            //frameBufferResized = false;
+            RecreateSwapChain();
+        }
+        else if (result != Result.Success)
+        {
+            throw new Exception("failed to present swap chain image!");
+        }
+
+        SemaphoreIndex = (uint)((SemaphoreIndex + 1) % Semaphores.Length);
+    }
+
+    private void ComputeFrame(float delta)
+    {
+        VkAPI.API.ResetCommandPool(Device, ComputeCommandPool, CommandPoolResetFlags.None);
+
+        CommandBufferBeginInfo commandBufferBeginInfo = new()
+        {
+            SType = StructureType.CommandBufferBeginInfo,
+            Flags = CommandBufferUsageFlags.OneTimeSubmitBit
+        };
+        VkAPI.API.BeginCommandBuffer(ComputeCommandBuffer, in commandBufferBeginInfo);
+
+        VkAPI.API.CmdBindDescriptorSets(ComputeCommandBuffer, PipelineBindPoint.Compute, ComputePipelineLayout, 0, 1, ComputeDescriptorSet, 0, 0);
+
+        VkAPI.API.CmdBindPipeline(ComputeCommandBuffer, PipelineBindPoint.Compute, ComputePipeline);
+        VkAPI.API.CmdDispatch(ComputeCommandBuffer, (uint)MathF.Ceiling(1920f / 32f), (uint)MathF.Ceiling(1080f / 32f), 1);
+
+        if (VkAPI.API.EndCommandBuffer(ComputeCommandBuffer) != Result.Success)
+        {
+            throw new Exception("failed to record command buffer!");
+        }
+
+        CommandBuffer buffer = ComputeCommandBuffer;
+        SubmitInfo submitInfo = new()
+        {
+            SType = StructureType.SubmitInfo,
+            WaitSemaphoreCount = 0,
+            CommandBufferCount = 1,
+            PCommandBuffers = &buffer,
+        };
+
+        if (VkAPI.API.QueueSubmit(GraphicsDevice.ComputeQueue, 1, submitInfo, ComputeFence) != Result.Success)
+        {
+            throw new Exception("Failed to submit draw command buffer");
+        }
+    }
+
+    private void DrawFrame(float delta)
+    {
+        ref FrameData frame = ref Frames[FrameIndex];
+        FrameSemaphores frameSemaphores = Semaphores[SemaphoreIndex];
+        Logger.LogInformation($"Guh: {1 / delta}");
+        
         // --- Begin ---
         VkAPI.API.ResetCommandPool(Device, frame.CommandPool, CommandPoolResetFlags.None);
 
@@ -1211,7 +1101,6 @@ public unsafe class Renderer : IDisposable
 
         // --- Draw ---
         VkAPI.API.CmdBindPipeline(frame.CommandBuffer, PipelineBindPoint.Graphics, graphicsPipeline);
-
         VkAPI.API.CmdBeginRenderPass(frame.CommandBuffer, in renderPassInfo, SubpassContents.Inline);
 
         Buffer* vertexBuffers = stackalloc[] { vertexBuffer };
@@ -1230,29 +1119,21 @@ public unsafe class Renderer : IDisposable
             throw new Exception("failed to record command buffer!");
         }
 
-        SubmitInfo submitInfo = new()
-        {
-            SType = StructureType.SubmitInfo,
-        };
-
         Semaphore* waitSemaphores = stackalloc[] { frameSemaphores.ImageAcquiredSemaphore };
         PipelineStageFlags* waitStages = stackalloc[] { PipelineStageFlags.ColorAttachmentOutputBit };
+        Semaphore* signalSemaphores = stackalloc[] { frameSemaphores.RenderCompleteSemaphore };
 
         CommandBuffer buffer = frame.CommandBuffer;
 
-        submitInfo = submitInfo with
+        SubmitInfo submitInfo = new()
         {
+            SType = StructureType.SubmitInfo,
             WaitSemaphoreCount = 1,
             PWaitSemaphores = waitSemaphores,
             PWaitDstStageMask = waitStages,
 
             CommandBufferCount = 1,
-            PCommandBuffers = &buffer
-        };
-
-        Semaphore* signalSemaphores = stackalloc[] { frameSemaphores.RenderCompleteSemaphore };
-        submitInfo = submitInfo with
-        {
+            PCommandBuffers = &buffer,
             SignalSemaphoreCount = 1,
             PSignalSemaphores = signalSemaphores,
         };
@@ -1261,35 +1142,6 @@ public unsafe class Renderer : IDisposable
         {
             throw new Exception("Failed to submit draw command buffer");
         }
-
-        uint frameIndex = FrameIndex;
-        SwapchainKHR* swapChains = stackalloc[] { SwapChain };
-        PresentInfoKHR presentInfo = new()
-        {
-            SType = StructureType.PresentInfoKhr,
-
-            WaitSemaphoreCount = 1,
-            PWaitSemaphores = &frameSemaphores.RenderCompleteSemaphore,
-
-            SwapchainCount = 1,
-            PSwapchains = swapChains,
-
-            PImageIndices = &frameIndex
-        };
-
-        result = KhrSwapChain.QueuePresent(GraphicsDevice.PresentQueue, presentInfo);
-
-        if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr)
-        {
-            //frameBufferResized = false;
-            RecreateSwapChain();
-        }
-        else if (result != Result.Success)
-        {
-            throw new Exception("failed to present swap chain image!");
-        }
-
-        SemaphoreIndex = (uint)((SemaphoreIndex + 1) % Semaphores.Length);
     }
 
     private void CreateVertexBuffer()
@@ -1360,67 +1212,7 @@ public unsafe class Renderer : IDisposable
 
     }
 
-    private SurfaceFormatKHR ChooseSwapSurfaceFormat(IReadOnlyList<SurfaceFormatKHR> availableFormats)
-    {
-        foreach (SurfaceFormatKHR availableFormat in availableFormats)
-        {
-            if (availableFormat.Format == Format.B8G8R8A8Srgb && availableFormat.ColorSpace == ColorSpaceKHR.SpaceSrgbNonlinearKhr)
-            {
-                return availableFormat;
-            }
-        }
-
-        return availableFormats[0];
-    }
-
-    private PresentModeKHR ChoosePresentMode(IReadOnlyList<PresentModeKHR> availablePresentModes)
-    {
-        foreach (PresentModeKHR availablePresentMode in availablePresentModes)
-        {
-            if (availablePresentMode == PresentModeKHR.MailboxKhr)
-            {
-                return availablePresentMode;
-            }
-        }
-
-        return PresentModeKHR.ImmediateKhr;
-    }
-
-    private Extent2D ChooseSwapExtent(SurfaceCapabilitiesKHR capabilities)
-    {
-        if (capabilities.CurrentExtent.Width != uint.MaxValue)
-        {
-            return capabilities.CurrentExtent;
-        }
-        else
-        {
-            Vector2D<int> framebufferSize = Window.FramebufferSize;
-
-            Extent2D actualExtent = new()
-            {
-                Width = (uint)framebufferSize.X,
-                Height = (uint)framebufferSize.Y
-            };
-
-            actualExtent.Width = Math.Clamp(actualExtent.Width, capabilities.MinImageExtent.Width, capabilities.MaxImageExtent.Width);
-            actualExtent.Height = Math.Clamp(actualExtent.Height, capabilities.MinImageExtent.Height, capabilities.MaxImageExtent.Height);
-
-            return actualExtent;
-        }
-    }
-
-    private string[] GetRequiredExtensions()
-    {
-        byte** glfwExtensions = Window.VkSurface!.GetRequiredExtensions(out uint glfwExtensionCount);
-        string[] extensions = SilkMarshal.PtrToStringArray((nint)glfwExtensions, (int)glfwExtensionCount);
-
-#if DEBUG
-        return [.. extensions, ExtDebugUtils.ExtensionName];
-#else
-        return extensions;
-#endif
-    }
-
+   
     protected virtual void Dispose(bool disposing)
     {
         if (!_disposed)
@@ -1440,8 +1232,8 @@ public unsafe class Renderer : IDisposable
 
             GraphicsDevice.Dispose();
 
-            KhrSurface?.DestroySurface(Instance, Surface, null);
-            VkAPI.API.DestroyInstance(Instance, null);
+            KhrSurface?.DestroySurface(GraphicsDevice.Instance, Surface, null);
+            VkAPI.API.DestroyInstance(GraphicsDevice.Instance, null);
 
             _disposed = true;
         }
