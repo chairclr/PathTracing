@@ -24,9 +24,13 @@ public unsafe class GraphicsDevice : IDisposable
 
     public ResourceFactory ResourceFactory { get; private set; }
 
+    public SwapChain MainSwapChain { get; private set; }
+
     public GraphicsDevice(Renderer renderer)
     {
         Renderer = renderer;
+
+        MainSwapChain = new SwapChain(this);
 
         ResourceFactory = new ResourceFactory(this);
     }
@@ -195,7 +199,7 @@ public unsafe class GraphicsDevice : IDisposable
         bool swapChainAdequate = false;
         if (extensionsSupported)
         {
-            SwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(device);
+            SwapChain.SwapChainSupportDetails swapChainSupport = MainSwapChain.QuerySwapChainSupport(device);
             swapChainAdequate = swapChainSupport.Formats.Any() && swapChainSupport.PresentModes.Any();
         }
 
@@ -245,7 +249,7 @@ public unsafe class GraphicsDevice : IDisposable
                 indices.GraphicsFamily = i;
             }
 
-            Renderer.KhrSurface!.GetPhysicalDeviceSurfaceSupport(device, i, Renderer.Surface, out Bool32 presentSupport);
+            MainSwapChain.KhrSurfaceExtension.GetPhysicalDeviceSurfaceSupport(device, i, MainSwapChain.Surface, out Bool32 presentSupport);
 
             if (presentSupport)
             {
@@ -261,48 +265,6 @@ public unsafe class GraphicsDevice : IDisposable
         }
 
         return indices;
-    }
-
-    public SwapChainSupportDetails QuerySwapChainSupport(PhysicalDevice PhysicalDevice)
-    {
-        SwapChainSupportDetails details = new();
-
-        Renderer.KhrSurface!.GetPhysicalDeviceSurfaceCapabilities(PhysicalDevice, Renderer.Surface, out details.Capabilities);
-
-        uint formatCount = 0;
-        Renderer.KhrSurface.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Renderer.Surface, ref formatCount, null);
-
-        if (formatCount != 0)
-        {
-            details.Formats = new SurfaceFormatKHR[formatCount];
-            fixed (SurfaceFormatKHR* formatsPtr = details.Formats)
-            {
-                Renderer.KhrSurface.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Renderer.Surface, ref formatCount, formatsPtr);
-            }
-        }
-        else
-        {
-            details.Formats = Array.Empty<SurfaceFormatKHR>();
-        }
-
-        uint presentModeCount = 0;
-        Renderer.KhrSurface.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Renderer.Surface, ref presentModeCount, null);
-
-        if (presentModeCount != 0)
-        {
-            details.PresentModes = new PresentModeKHR[presentModeCount];
-            fixed (PresentModeKHR* formatsPtr = details.PresentModes)
-            {
-                Renderer.KhrSurface.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Renderer.Surface, ref presentModeCount, formatsPtr);
-            }
-
-        }
-        else
-        {
-            details.PresentModes = Array.Empty<PresentModeKHR>();
-        }
-
-        return details;
     }
 
     private string[] GetRequiredExtensions()
@@ -379,13 +341,6 @@ public unsafe class GraphicsDevice : IDisposable
         {
             return GraphicsFamily.HasValue && PresentFamily.HasValue;
         }
-    }
-
-    public struct SwapChainSupportDetails
-    {
-        public SurfaceCapabilitiesKHR Capabilities;
-        public SurfaceFormatKHR[] Formats;
-        public PresentModeKHR[] PresentModes;
     }
 
     protected virtual void Dispose(bool disposing)

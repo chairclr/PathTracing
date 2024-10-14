@@ -5,13 +5,15 @@ using Silk.NET.Windowing;
 
 namespace RayTracing.Graphics;
 
-public class SwapChain : IDisposable
+public unsafe class SwapChain : IDisposable
 {
     private bool _disposed;
 
     internal GraphicsDevice GraphicsDevice;
 
-    internal KhrSwapchain KhrExtension;
+    internal KhrSwapchain KhrSwapchainExtension;
+
+    internal KhrSurface KhrSurfaceExtension;
 
     internal SwapchainKHR VkSwapchain;
 
@@ -19,14 +21,134 @@ public class SwapChain : IDisposable
 
     public Extent2D Extent { get; internal set; }
 
+    public SurfaceKHR Surface { get; internal set; }
+
     internal SwapChain(GraphicsDevice graphicsDevice)
     {
         GraphicsDevice = graphicsDevice;
 
-        if (!VkAPI.API.TryGetDeviceExtension(GraphicsDevice.Instance, GraphicsDevice.Device, out KhrExtension))
+        if (!VkAPI.API.TryGetDeviceExtension(GraphicsDevice.Instance, GraphicsDevice.Device, out KhrSwapchainExtension))
         {
             throw new NotSupportedException("VK_KHR_swapchain extension not found");
         }
+
+        if (!VkAPI.API.TryGetInstanceExtension<KhrSurface>(GraphicsDevice.Instance, out KhrSurfaceExtension))
+        {
+            throw new NotSupportedException("KHR_surface extension not found");
+        }
+    }
+
+    public void Recreate()
+    {
+        KhrSwapchainExtension.DestroySwapchain(GraphicsDevice.Device, VkSwapchain, null);
+
+        CreateSwapChainCore();
+    }
+    
+    internal void CreateSwapChainCore()
+    {
+        Surface = GraphicsDevice.Renderer.Window.VkSurface!.Create<AllocationCallbacks>(GraphicsDevice.Instance.ToHandle(), null).ToSurface();
+
+        SwapChainSupportDetails swapChainSupport = QuerySwapChainSupport(GraphicsDevice.PhysicalDevice);
+
+        SurfaceFormatKHR surfaceFormat = SwapChain.ChooseSwapSurfaceFormat(swapChainSupport.Formats);
+        PresentModeKHR presentMode = SwapChain.ChoosePresentMode(swapChainSupport.PresentModes);
+        Extent2D extent = SwapChain.ChooseSwapExtent(GraphicsDevice.Renderer.Window, swapChainSupport.Capabilities);
+
+        uint imageCount = swapChainSupport.Capabilities.MinImageCount + 1;
+        if (swapChainSupport.Capabilities.MaxImageCount > 0 && imageCount > swapChainSupport.Capabilities.MaxImageCount)
+        {
+            imageCount = swapChainSupport.Capabilities.MaxImageCount;
+        }
+
+        SwapchainCreateInfoKHR createInfo = new()
+        {
+            SType = StructureType.SwapchainCreateInfoKhr,
+            Surface = Surface,
+
+            MinImageCount = imageCount,
+            ImageFormat = surfaceFormat.Format,
+            ImageColorSpace = surfaceFormat.ColorSpace,
+            ImageExtent = extent,
+            ImageArrayLayers = 1,
+            ImageUsage = ImageUsageFlags.ColorAttachmentBit,
+        };
+
+        GraphicsDevice.QueueFamilyIndices indices = GraphicsDevice.FindQueueFamilies(GraphicsDevice.PhysicalDevice);
+        uint* queueFamilyIndices = stackalloc uint[] { indices.GraphicsAndComputeFamily!.Value, indices.PresentFamily!.Value };
+
+        if (indices.GraphicsAndComputeFamily != indices.PresentFamily)
+        {
+            createInfo = createInfo with
+            {
+                ImageSharingMode = SharingMode.Concurrent,
+                QueueFamilyIndexCount = 2,
+                PQueueFamilyIndices = queueFamilyIndices,
+            };
+        }
+        else
+        {
+            createInfo.ImageSharingMode = SharingMode.Exclusive;
+        }
+
+        createInfo = createInfo with
+        {
+            PreTransform = swapChainSupport.Capabilities.CurrentTransform,
+            CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
+            PresentMode = presentMode,
+            Clipped = true,
+
+            OldSwapchain = default
+        };
+
+        if (KhrSwapchainExtension.CreateSwapchain(GraphicsDevice.Device, in createInfo, null, out VkSwapchain) != Result.Success)
+        {
+            throw new Exception("Failed to create SwapChain");
+        }
+
+        Format = surfaceFormat.Format;
+        Extent = extent;
+    }
+
+    public SwapChainSupportDetails QuerySwapChainSupport(PhysicalDevice PhysicalDevice)
+    {
+        SwapChainSupportDetails details = new();
+
+        KhrSurfaceExtension!.GetPhysicalDeviceSurfaceCapabilities(PhysicalDevice, Surface, out details.Capabilities);
+
+        uint formatCount = 0;
+        KhrSurfaceExtension.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, null);
+
+        if (formatCount != 0)
+        {
+            details.Formats = new SurfaceFormatKHR[formatCount];
+            fixed (SurfaceFormatKHR* formatsPtr = details.Formats)
+            {
+                KhrSurfaceExtension.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, formatsPtr);
+            }
+        }
+        else
+        {
+            details.Formats = Array.Empty<SurfaceFormatKHR>();
+        }
+
+        uint presentModeCount = 0;
+        KhrSurfaceExtension.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, null);
+
+        if (presentModeCount != 0)
+        {
+            details.PresentModes = new PresentModeKHR[presentModeCount];
+            fixed (PresentModeKHR* formatsPtr = details.PresentModes)
+            {
+                KhrSurfaceExtension.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, formatsPtr);
+            }
+        }
+        else
+        {
+            details.PresentModes = Array.Empty<PresentModeKHR>();
+        }
+
+        return details;
     }
 
     internal static SurfaceFormatKHR ChooseSwapSurfaceFormat(IReadOnlyList<SurfaceFormatKHR> availableFormats)
@@ -83,6 +205,9 @@ public class SwapChain : IDisposable
     {
         if (!_disposed)
         {
+            KhrSwapchainExtension.DestroySwapchain(GraphicsDevice.Device, VkSwapchain, null);
+            KhrSwapchainExtension.Dispose();
+
             _disposed = true;
         }
     }
@@ -93,76 +218,12 @@ public class SwapChain : IDisposable
         Dispose(disposing: true);
         GC.SuppressFinalize(this);
     }
-}
-
-partial class ResourceFactory
-{
-    public unsafe SwapChain CreateSwapChain(SurfaceKHR surface)
+    
+    public struct SwapChainSupportDetails
     {
-        SwapChain swapChain = new SwapChain(GraphicsDevice);
-
-        GraphicsDevice.SwapChainSupportDetails swapChainSupport = GraphicsDevice.QuerySwapChainSupport(GraphicsDevice.PhysicalDevice);
-
-        SurfaceFormatKHR surfaceFormat = SwapChain.ChooseSwapSurfaceFormat(swapChainSupport.Formats);
-        PresentModeKHR presentMode = SwapChain.ChoosePresentMode(swapChainSupport.PresentModes);
-        Extent2D extent = SwapChain.ChooseSwapExtent(GraphicsDevice.Renderer.Window, swapChainSupport.Capabilities);
-
-        uint imageCount = swapChainSupport.Capabilities.MinImageCount + 1;
-        if (swapChainSupport.Capabilities.MaxImageCount > 0 && imageCount > swapChainSupport.Capabilities.MaxImageCount)
-        {
-            imageCount = swapChainSupport.Capabilities.MaxImageCount;
-        }
-
-        SwapchainCreateInfoKHR createInfo = new()
-        {
-            SType = StructureType.SwapchainCreateInfoKhr,
-            Surface = surface,
-
-            MinImageCount = imageCount,
-            ImageFormat = surfaceFormat.Format,
-            ImageColorSpace = surfaceFormat.ColorSpace,
-            ImageExtent = extent,
-            ImageArrayLayers = 1,
-            ImageUsage = ImageUsageFlags.ColorAttachmentBit,
-        };
-
-        GraphicsDevice.QueueFamilyIndices indices = GraphicsDevice.FindQueueFamilies(GraphicsDevice.PhysicalDevice);
-        uint* queueFamilyIndices = stackalloc uint[] { indices.GraphicsAndComputeFamily!.Value, indices.PresentFamily!.Value };
-
-        if (indices.GraphicsAndComputeFamily != indices.PresentFamily)
-        {
-            createInfo = createInfo with
-            {
-                ImageSharingMode = SharingMode.Concurrent,
-                QueueFamilyIndexCount = 2,
-                PQueueFamilyIndices = queueFamilyIndices,
-            };
-        }
-        else
-        {
-            createInfo.ImageSharingMode = SharingMode.Exclusive;
-        }
-
-        createInfo = createInfo with
-        {
-            PreTransform = swapChainSupport.Capabilities.CurrentTransform,
-            CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
-            PresentMode = presentMode,
-            Clipped = true,
-
-            OldSwapchain = default
-        };
-
-        if (swapChain.KhrExtension.CreateSwapchain(GraphicsDevice.Device, in createInfo, null, out swapChain.VkSwapchain) != Result.Success)
-        {
-            throw new Exception("Failed to create SwapChain");
-        }
-
-        swapChain.KhrExtension.GetSwapchainImages(GraphicsDevice.Device, swapChain.VkSwapchain, ref imageCount, null);
-
-        swapChain.Format = surfaceFormat.Format;
-        swapChain.Extent = extent;
-
-        return swapChain;
+        public SurfaceCapabilitiesKHR Capabilities;
+        public SurfaceFormatKHR[] Formats;
+        public PresentModeKHR[] PresentModes;
     }
 }
+

@@ -21,11 +21,6 @@ public unsafe class Renderer : IDisposable
 
     public readonly IWindow Window;
 
-    public SwapChain? SwapChain;
-
-    public KhrSurface? KhrSurface;
-    public SurfaceKHR Surface;
-
     public GraphicsDevice GraphicsDevice;
     private Device Device => GraphicsDevice.Device;
 
@@ -71,8 +66,6 @@ public unsafe class Renderer : IDisposable
     public void Init()
     {
         GraphicsDevice.Init();
-        CreateSurface();
-        CreateSwapChain();
         CreateImageViews();
         CreateRenderPass();
 
@@ -501,21 +494,6 @@ public unsafe class Renderer : IDisposable
         }
     }
 
-    private void CreateSurface()
-    {
-        if (!VkAPI.API.TryGetInstanceExtension<KhrSurface>(GraphicsDevice.Instance, out KhrSurface))
-        {
-            throw new NotSupportedException("KHR_surface extension not found");
-        }
-
-        Surface = Window.VkSurface!.Create<AllocationCallbacks>(GraphicsDevice.Instance.ToHandle(), null).ToSurface();
-    }
-
-    private void CreateSwapChain()
-    {
-        SwapChain = GraphicsDevice.ResourceFactory.CreateSwapChain(Surface);
-    }
-
     private void RecreateSwapChain()
     {
         Vector2D<int> framebufferSize = Window.FramebufferSize;
@@ -530,7 +508,7 @@ public unsafe class Renderer : IDisposable
 
         CleanUpSwapChain();
 
-        CreateSwapChain();
+        SwapChain!.Recreate();
         CreateImageViews();
         CreateRenderPass();
         CreateDescriptorSets();
@@ -556,8 +534,6 @@ public unsafe class Renderer : IDisposable
         VkAPI.API.DestroyPipeline(Device, graphicsPipeline, null);
         VkAPI.API.DestroyPipelineLayout(Device, pipelineLayout, null);
         VkAPI.API.DestroyRenderPass(Device, renderPass, null);
-
-        KhrSwapChain!.DestroySwapchain(Device, SwapChain, null);
     }
 
     private void CreateImageViews()
